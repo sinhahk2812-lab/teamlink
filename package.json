@@ -1,6 +1,6 @@
 {
   "name": "teamlink",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Serverless LAN messenger for teams, with optional relay for remote members",
   "main": "electron/main.js",
   "license": "MIT",
@@ -34,9 +34,18 @@
       "artifactName": "TeamLink-Setup-${version}.${ext}"
     },
     "mac": {
-      "target": "dmg",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
       "category": "public.app-category.business",
-      "artifactName": "TeamLink-${version}-mac-${arch}.${ext}"
+      "artifactName": "TeamLink-${version}-mac-${arch}.${ext}",
+      "identity": "-"
     },
     "linux": {
       "target": [

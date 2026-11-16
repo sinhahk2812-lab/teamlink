@@ -23,6 +23,11 @@ jobs:
       - run: npx electron-builder --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # Apple Silicon refuses to start an app without at least an ad-hoc signature, so fail the build if it is missing.
+      - if: runner.os == 'macOS'
+        run: |
+          codesign --verify --deep --strict dist/mac-arm64/TeamLink.app
+          codesign --verify --deep --strict dist/mac/TeamLink.app
       - uses: actions/upload-artifact@v4
         with:
           name: TeamLink-${{ matrix.os }}
