@@ -98,6 +98,7 @@ function onEvent(event, d) {
   else if (event === 'message') onMessage(d);
   else if (event === 'file') onFile(d);
   else if (event === 'incoming') notify(d);
+  else if (event === 'opened') toast(`${peerName(d.by)} opened your sealed message`);
 }
 
 // ---------------------------------------------------------------- names

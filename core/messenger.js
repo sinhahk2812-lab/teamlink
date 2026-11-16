@@ -396,6 +396,8 @@ class Messenger extends EventEmitter {
       m.read_by.push(from);
       this.store.run('UPDATE messages SET read_by=?, read_at=COALESCE(read_at, ?) WHERE id=?', JSON.stringify(m.read_by), Date.now(), m.id);
       this.ev('message', this.msgView(this.store.message(m.id)));
+      // IP Messenger style "opened" notice for sealed messages
+      if (m.sealed) this.ev('opened', { conv: m.conv, by: from, id: m.id, preview: m.body.trim().slice(0, 80) || 'Attachment' });
     }
   }
 

@@ -66,7 +66,7 @@ async function start() {
     tray.on('click', showWindow);
   } catch {}
 
-  messenger.on('event', (name, d) => { if (name === 'incoming') onIncoming(d); });
+  messenger.on('event', (name, d) => { if (name === 'incoming') onIncoming(d); else if (name === 'opened') onOpened(d); });
   win.on('focus', () => { win.flashFrame(false); hidePopup(); });
   win.on('hide', installIfReady);
   setupUpdates();
@@ -97,6 +97,15 @@ function onIncoming(d) {
     title: conv.type === 'dm' ? who : `${who} · ${conv.type === 'all' ? 'Everyone' : conv.name || 'Group'}` };
   showPopup();
   shell.beep();
+}
+
+// The other person opened a sealed message you sent: tell the sender, like IP Messenger's "opened" notice.
+function onOpened(d) {
+  if ((win.isVisible() && win.isFocused()) || messenger.cfg.popup === false) return; // the window shows it itself
+  const peer = messenger.peers.get(d.by);
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  popupData = { conv: d.conv, count: 1, title: `${(peer && peer.name) || 'Someone'} opened your message`, body: d.preview, note: `Opened at ${time} · click to open the chat` };
+  showPopup();
 }
 
 function showPopup() {
