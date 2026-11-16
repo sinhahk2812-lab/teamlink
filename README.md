@@ -12,7 +12,7 @@ directly. People working from home can join through a small optional relay.
 | --- | --- |
 | Automatic member list | UDP broadcast discovery, grouped by department, online / away status |
 | 1-to-1 chat | Delivery receipts; messages to offline people are delivered when they come back |
-| Message several people | Pick a few members and send one message; each gets it privately |
+| Message several people | Pick a few members and send one message, with files if needed; each gets it privately |
 | Group chats | Any member can rename the group, add or remove people, or leave |
 | Everyone channel | Broadcast to the whole team (IP Messenger's "broadcast") |
 | Sealed messages | Receiver must click to open; sender sees when it was opened |

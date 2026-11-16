@@ -521,16 +521,40 @@ function multiDialog() {
   const pick = h('div', { class: 'pick', onchange: () => { const n = picked().length; count.textContent = n ? `${n} selected. Each person gets a private message.` : 'Nobody selected yet.'; } }, boxes);
   const text = h('textarea', { rows: 4, maxLength: 20000, placeholder: 'Write your message' });
   const sealed = h('input', { type: 'checkbox' });
+  // attachments: real paths in the desktop app, local uploads in browser mode
+  const files = [];
+  const chips = h('div', { id: 'multiFiles' });
+  const drawFiles = () => chips.replaceChildren(...files.map((f, i) => h('div', { class: 'chip' }, h('span', { title: f.name }, f.name + (f.path ? '' : ' (adding…)')),
+    h('button', { type: 'button', title: 'Remove', onclick: () => { files.splice(i, 1); drawFiles(); } }, '×'))));
+  const addPicked = (paths) => { for (const p of paths || []) files.push({ name: p.split(/[\\/]/).pop(), path: p }); drawFiles(); };
+  const input = h('input', { type: 'file', multiple: true, hidden: true, onchange: async (e) => {
+    for (const file of [...e.target.files]) {
+      const item = { name: file.name };
+      files.push(item); drawFiles();
+      try {
+        const r = await fetch(`/upload?token=${TOKEN}&name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+        if (!r.ok) throw new Error('Could not add ' + file.name);
+        item.path = (await r.json()).path;
+      } catch (err) { files.splice(files.indexOf(item), 1); toast(err.message); }
+      drawFiles();
+    }
+    e.target.value = '';
+  } });
+  const attachRow = h('div', { class: 'attach-row' },
+    h('button', { class: 'ghost', type: 'button', onclick: async () => { if (desk) addPicked(await desk.pickFiles()); else input.click(); } }, '📎 Attach files'),
+    desk && h('button', { class: 'ghost', type: 'button', onclick: async () => addPicked(await desk.pickFolder()) }, '📁 Attach a folder'), input);
   modal('Message several people', [
     h('label', null, 'Send to'),
     people.length ? pick : h('p', { class: 'hint' }, 'No teammates found yet.'), count,
     ...field('Message', text),
+    attachRow, chips,
     h('label', null, sealed, ' 🔒 Sealed: each person must click to open it, and you see when they do'),
   ], { label: 'Send', run: async () => {
     const ids = picked();
     if (!ids.length) { toast('Pick at least one person'); throw new Error('none'); }
-    if (!text.value.trim()) { toast('Write a message first'); throw new Error('empty'); }
-    for (const id of ids) await call('send', { conv: 'dm:' + id, text: text.value, sealed: sealed.checked });
+    if (files.some((f) => !f.path)) { toast('Still adding attachments…'); throw new Error('busy'); }
+    if (!text.value.trim() && !files.length) { toast('Write a message or attach a file first'); throw new Error('empty'); }
+    for (const id of ids) await call('send', { conv: 'dm:' + id, text: text.value, sealed: sealed.checked, paths: files.map((f) => f.path) });
     toast(`Sent to ${ids.length} ${ids.length === 1 ? 'person' : 'people'}`);
   } });
 }
