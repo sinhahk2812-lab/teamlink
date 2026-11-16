@@ -312,8 +312,8 @@ function msgNode(m, c, showWho) {
   let meta = fmtTime(m.ts);
   if (m.mine) {
     if (m.sealed) meta += m.readAt ? ' · Opened ' + fmtTime(m.readAt) : m.delivered ? ' · Delivered, not opened yet' : ' · Waiting for them to come online';
-    else if (m.recipients <= 1) meta += m.delivered ? ' · Delivered' : m.recipients ? ' · Waiting for them to come online' : '';
-    else meta += ` · Delivered to ${m.delivered} of ${m.recipients}`;
+    else if (m.recipients <= 1) meta += m.readAt ? ' · ✓✓ Seen ' + fmtTime(m.readAt) : m.delivered ? ' · ✓ Delivered, not seen yet' : m.recipients ? ' · Waiting for them to come online' : '';
+    else meta += ` · Delivered to ${m.delivered} of ${m.recipients}` + (m.seen ? ` · Seen by ${m.seen}` : '');
   }
   return h('div', { class: 'msg' + (m.mine ? ' mine' : ''), 'data-id': m.id },
     showWho && h('div', { class: 'who' }, memberName(c, m.sender)), bubble, h('div', { class: 'meta' }, meta));

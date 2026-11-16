@@ -54,6 +54,11 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await until('dm ack', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === m1.id).delivered === 1);
   assert.equal(B.getState().convs.find((c) => c.id === 'dm:' + A.me.id).unread, 1);
   ok('direct message over LAN, delivery receipt, unread count');
+  assert.ok(!msgs(A, 'dm:' + B.me.id).find((m) => m.id === m1.id).readAt);
+  B.markRead('dm:' + A.me.id); // Bilal opens the chat
+  await until('seen notice', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === m1.id).readAt);
+  assert.equal(B.getState().convs.find((c) => c.id === 'dm:' + A.me.id).unread, 0);
+  ok('sender is told when the message has been seen');
 
   await C.send({ conv: 'dm:' + A.me.id, text: 'Hi from home' });
   await until('relay dm', () => msgs(A, 'dm:' + C.me.id).some((m) => m.body === 'Hi from home'));
@@ -74,6 +79,9 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await until('group sync', () => B.store.conv(g.id) && C.store.conv(g.id));
   await B.send({ conv: g.id, text: 'standup at 10' });
   await until('group msg', () => msgs(A, g.id).length === 1 && msgs(C, g.id).length === 1);
+  B.markRead(g.id); // nothing of B's own to confirm
+  A.markRead(g.id); C.markRead(g.id);
+  await until('group seen', () => msgs(B, g.id)[0].seen === 2);
   ok('group chat reaches LAN and relay members');
   A.updateGroup({ conv: g.id, name: 'Design Team', members: [B.me.id] });
   await until('group update', () => B.store.conv(g.id).name === 'Design Team' && C.store.conv(g.id).left_group === 1);

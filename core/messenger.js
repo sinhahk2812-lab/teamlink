@@ -386,16 +386,33 @@ class Messenger extends EventEmitter {
     this.ev('conv', this.convView(this.store.conv(m.conv)));
   }
 
+  // "Seen" notices. One frame may confirm several messages; `mid` is the older single-message form.
   onRead(from, f) {
     this.ack(from, f.id);
-    const m = this.store.message(String(f.mid));
-    if (!m || m.sender !== this.me.id || !m.recipients.includes(from) || m.read_at) return;
-    this.store.run('UPDATE messages SET read_at=? WHERE id=?', Date.now(), m.id);
-    this.ev('message', this.msgView(this.store.message(m.id)));
+    const ids = Array.isArray(f.mids) ? f.mids.slice(0, 500) : [f.mid];
+    for (const id of ids) {
+      const m = this.store.message(String(id));
+      if (!m || m.sender !== this.me.id || !m.recipients.includes(from) || m.read_by.includes(from)) continue;
+      m.read_by.push(from);
+      this.store.run('UPDATE messages SET read_by=?, read_at=COALESCE(read_at, ?) WHERE id=?', JSON.stringify(m.read_by), Date.now(), m.id);
+      this.ev('message', this.msgView(this.store.message(m.id)));
+    }
   }
 
+  // Called when the user is actually looking at the conversation: clears the unread count
+  // and tells each sender that their messages were seen.
   markRead(convId) {
-    if (this.store.markRead(convId)) this.ev('conv', this.convView(this.store.conv(convId)));
+    const bySender = new Map();
+    for (const m of this.store.unreadMessages(convId)) {
+      if (m.sealed && !m.opened) continue; // a sealed message counts as seen only when it is opened
+      if (!bySender.has(m.sender)) bySender.set(m.sender, []);
+      bySender.get(m.sender).push(m.id);
+    }
+    if (!this.store.markRead(convId)) return;
+    for (const [sender, mids] of bySender) {
+      if (this.peers.has(sender)) this.deliver(sender, { t: 'read', id: 'r:' + C.rid(8), mids });
+    }
+    this.ev('conv', this.convView(this.store.conv(convId)));
   }
 
   msgView(m) {
@@ -404,7 +421,7 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, readAt: m.read_at };
+      sealed: !!m.sealed, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {

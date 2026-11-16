@@ -25,6 +25,8 @@ class Store {
         id TEXT NOT NULL, peer TEXT NOT NULL, frame TEXT NOT NULL, created INTEGER NOT NULL,
         PRIMARY KEY(id, peer));
     `);
+    // added in 1.0.8: who has seen each message
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN read_by TEXT'); } catch {}
     this._stmts = new Map();
   }
 
@@ -72,7 +74,7 @@ class Store {
   // ---- messages
   static row(m) {
     if (!m) return m;
-    for (const k of ['files', 'recipients', 'delivered']) m[k] = m[k] ? JSON.parse(m[k]) : [];
+    for (const k of ['files', 'recipients', 'delivered', 'read_by']) m[k] = m[k] ? JSON.parse(m[k]) : [];
     return m;
   }
   addMessage(m) {
@@ -91,6 +93,7 @@ class Store {
     return Store.row(this.get('SELECT * FROM messages WHERE conv=? ORDER BY ts DESC, rowid DESC LIMIT 1', conv));
   }
   unread(conv) { return this.get('SELECT COUNT(*) n FROM messages WHERE conv=? AND unread=1', conv).n; }
+  unreadMessages(conv) { return this.all('SELECT id, sender, sealed, opened FROM messages WHERE conv=? AND unread=1', conv); }
   markRead(conv) { return this.run('UPDATE messages SET unread=0 WHERE conv=? AND unread=1', conv).changes; }
   markDelivered(id, peer) {
     const m = this.message(id);
