@@ -1,0 +1,57 @@
+{
+  "name": "teamlink",
+  "version": "1.0.0",
+  "description": "Serverless LAN messenger for teams, with optional relay for remote members",
+  "main": "electron/main.js",
+  "license": "MIT",
+  "author": "TeamLink",
+  "scripts": {
+    "start": "electron .",
+    "headless": "node core/cli.js",
+    "relay": "node relay/server.js",
+    "test": "node test/e2e.js",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "team.teamlink.app",
+    "productName": "TeamLink",
+    "files": [
+      "core/**",
+      "ui/**",
+      "electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "TeamLink-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.business",
+      "artifactName": "TeamLink-${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Network",
+      "artifactName": "TeamLink-${version}-linux.${ext}"
+    },
+    "publish": null,
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "TeamLink"
+    }
+  },
+  "homepage": "https://github.com/sinhahk2812-lab/teamlink"
+}

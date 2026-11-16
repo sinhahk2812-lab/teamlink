@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeamLink</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header id="me">
+      <button id="meBtn" class="me-btn" title="Your profile and status">
+        <span class="avatar" id="meAvatar"></span>
+        <span class="me-text"><b id="meName"></b><small id="meStatus"></small></span>
+      </button>
+      <button id="newGroupBtn" class="icon-btn" title="New group">＋</button>
+      <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
+    </header>
+    <div id="searchWrap"><input id="search" type="search" placeholder="Search messages and people" autocomplete="off"></div>
+    <div id="banner" hidden></div>
+    <nav id="lists">
+      <section id="chatSection"><h3>Chats</h3><ul id="convList"></ul></section>
+      <section><h3 id="membersTitle">Members</h3><ul id="peerList"></ul></section>
+      <section id="resultSection" hidden><h3>Search results</h3><ul id="resultList"></ul></section>
+    </nav>
+    <footer id="net"></footer>
+  </aside>
+
+  <main id="main">
+    <div id="empty">
+      <div class="empty-card">
+        <h1>TeamLink</h1>
+        <p>Pick a teammate or a chat on the left to start. Messages and files travel directly between computers and are encrypted end to end.</p>
+      </div>
+    </div>
+    <div id="chat" hidden>
+      <header id="chatHead">
+        <button id="backBtn" class="icon-btn" title="Back">←</button>
+        <span class="avatar" id="chatAvatar"></span>
+        <div class="chat-title"><b id="chatName"></b><small id="chatSub"></small></div>
+        <button id="groupEditBtn" class="icon-btn" title="Group members" hidden>👥</button>
+        <button id="chatMenuBtn" class="icon-btn" title="Delete conversation">🗑</button>
+      </header>
+      <div id="messages"></div>
+      <div id="dropHint" hidden>Drop files to attach</div>
+      <footer id="composer">
+        <div id="attachments"></div>
+        <div class="row">
+          <button id="attachBtn" class="icon-btn" title="Attach files">📎</button>
+          <button id="folderBtn" class="icon-btn" title="Attach a folder" hidden>📁</button>
+          <button id="sealBtn" class="icon-btn" title="Sealed message: the receiver must click to open it and you are told when they do">🔒</button>
+          <textarea id="input" rows="1" placeholder="Write a message. Paste a screenshot with Ctrl+V."></textarea>
+          <button id="sendBtn" class="primary">Send</button>
+        </div>
+        <input id="fileInput" type="file" multiple hidden>
+      </footer>
+    </div>
+  </main>
+</div>
+
+<div id="modal" hidden><div id="modalCard"></div></div>
+<div id="viewer" hidden><img id="viewerImg" alt=""></div>
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
