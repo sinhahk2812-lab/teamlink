@@ -280,12 +280,22 @@ function fileNode(m, f) {
     action = desk ? [h('button', { onclick: () => desk.openPath(f.path) }, 'Open'), h('button', { onclick: () => desk.showItem(f.path) }, 'Folder')]
       : h('a', { class: 'btn', href: fileUrl(f.fid, true) }, 'Save');
   } else if (!ready) {
-    action = h('button', { onclick: () => call('download', { fid: f.fid }) }, 'Download');
+    action = h('button', { onclick: () => downloadFile(f) }, 'Download');
   }
   return h('div', { class: 'file' }, h('span', null, '📄'),
     h('div', { class: 'info' }, h('div', { class: 'fname', title: f.name }, f.name),
       h('div', { class: 'fsub' }, sub, prog && prog.error ? h('span', { class: 'err' }, ' · ' + prog.error) : null), bar),
     action);
+}
+
+// In the desktop app every download first asks where to save it; cancelling the dialog cancels the download.
+async function downloadFile(f) {
+  let saveAs;
+  if (desk) {
+    saveAs = await desk.pickSave(f.name.split(/[\\/]/).pop());
+    if (!saveAs) return;
+  }
+  call('download', { fid: f.fid, saveAs }).catch(() => {});
 }
 
 function msgNode(m, c, showWho) {

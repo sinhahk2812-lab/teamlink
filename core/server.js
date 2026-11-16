@@ -92,7 +92,7 @@ function startServer(messenger, { port = 0, token } = {}) {
     send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, paths: (p.paths || []).map(String) }),
     markRead: (p) => messenger.markRead(String(p.conv)),
     openSealed: (p) => messenger.openSealed(String(p.id)),
-    download: (p) => messenger.download(String(p.fid)),
+    download: (p) => messenger.download(String(p.fid), p.saveAs ? String(p.saveAs) : undefined),
     search: (p) => messenger.search(p),
     createGroup: (p) => messenger.createGroup(p),
     updateGroup: (p) => messenger.updateGroup(p),

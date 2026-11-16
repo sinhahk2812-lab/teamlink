@@ -1,11 +1,12 @@
 'use strict';
 // Desktop shell: starts the engine in this process and shows its UI in a window, with a tray icon.
-const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const { Messenger } = require('../core/messenger');
 const { startServer } = require('../core/server');
 
-let win = null, tray = null, messenger = null, server = null, quitting = false;
+let win = null, tray = null, messenger = null, server = null, exiting = false;
 
 // Tray icon drawn in code (a teal disc), so the app ships without binary assets.
 function trayIcon() {
@@ -50,7 +51,10 @@ async function start() {
   win.webContents.session.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'notifications'));
 
   // Closing the window keeps the app running in the tray so messages still arrive.
-  win.on('close', (e) => { if (!quitting) { e.preventDefault(); win.hide(); } });
+  win.on('close', (e) => { if (!exiting) { e.preventDefault(); win.hide(); } });
+  // Windows signs out / shuts down: this is the one case where the app must really stop.
+  win.on('session-end', exitApp);
+  powerMonitor.on('shutdown', exitApp);
 
   try {
     tray = new Tray(trayIcon());
@@ -58,13 +62,19 @@ async function start() {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Open TeamLink', click: showWindow },
       { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
+      { label: 'Exit TeamLink completely…', click: confirmExit },
     ]));
     tray.on('click', showWindow);
   } catch {}
 
   messenger.on('event', (name) => { if (name === 'incoming' && !win.isFocused()) win.flashFrame(true); });
   win.on('focus', () => win.flashFrame(false));
+
+  // Installed app: start with the computer by default, once. It can be switched off in Settings.
+  const marker = path.join(app.getPath('userData'), 'autostart-set');
+  if (app.isPackaged && !fs.existsSync(marker)) {
+    try { app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] }); fs.writeFileSync(marker, '1'); } catch {}
+  }
   app.on('activate', showWindow);
 }
 
@@ -74,6 +84,13 @@ const knownPath = (p) => !!messenger.store.get('SELECT 1 x FROM files WHERE path
 
 ipcMain.handle('pickFiles', async (e) => (fromUi(e) ? (await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] })).filePaths : []));
 ipcMain.handle('pickFolder', async (e) => (fromUi(e) ? (await dialog.showOpenDialog(win, { properties: ['openDirectory'] })).filePaths : []));
+ipcMain.handle('pickSave', async (e, name) => {
+  if (!fromUi(e)) return null;
+  const dir = messenger.cfg.downloadDir;
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  const r = await dialog.showSaveDialog(win, { title: 'Save file', defaultPath: path.join(dir, path.basename(String(name || 'file'))) });
+  return r.canceled ? null : r.filePath;
+});
 ipcMain.handle('openPath', async (e, p) => {
   if (!fromUi(e) || !knownPath(p)) return;
   const choice = await dialog.showMessageBox(win, { type: 'question', buttons: ['Open', 'Cancel'], defaultId: 1, cancelId: 1,
@@ -90,11 +107,24 @@ ipcMain.handle('focus', (e) => { if (fromUi(e)) showWindow(); });
 ipcMain.handle('getAutostart', () => app.getLoginItemSettings().openAtLogin);
 ipcMain.handle('setAutostart', (e, on) => { if (fromUi(e)) app.setLoginItemSettings({ openAtLogin: !!on, args: ['--hidden'] }); });
 
+// TeamLink is meant to stay reachable all day. Closing the window, Quit in the menu, Alt+F4 or Cmd+Q
+// only hide it; it keeps running in the tray. The only way to stop it is the tray's "Exit completely".
 app.on('before-quit', (e) => {
-  if (quitting) return;
-  quitting = true;
-  if (!messenger) return;
+  if (exiting) return;
   e.preventDefault();
-  Promise.resolve().then(() => { server && server.close(); return messenger.stop(); }).catch(() => {}).finally(() => app.exit(0));
+  if (win) win.hide();
 });
+
+async function confirmExit() {
+  const choice = await dialog.showMessageBox({ type: 'question', buttons: ['Keep running', 'Exit'], defaultId: 0, cancelId: 0,
+    message: 'Exit TeamLink completely?', detail: 'You will appear offline and will not receive messages or files until you start it again.' });
+  if (choice.response === 1) exitApp();
+}
+
+function exitApp() {
+  if (exiting) return;
+  exiting = true;
+  Promise.resolve().then(() => { server && server.close(); return messenger && messenger.stop(); }).catch(() => {}).finally(() => app.exit(0));
+}
+
 app.on('window-all-closed', () => {});

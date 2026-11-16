@@ -41,7 +41,11 @@ First run on each computer:
 3. Allow the app through the firewall when the system asks (Windows Defender prompt on Windows,
    "Local Network" permission on macOS). Without this, other computers cannot find you.
 
-Closing the window keeps the app running in the tray so messages still arrive. Use the tray menu to quit.
+TeamLink stays in the background so messages always arrive: closing the window or choosing Quit only hides it
+in the tray. To really stop it, right-click the tray icon and choose "Exit TeamLink completely". The installed app
+also starts with the computer (switch this off in Settings).
+
+When you download a received file, the app asks where to save it.
 
 ## Build installers
 

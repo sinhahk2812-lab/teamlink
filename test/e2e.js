@@ -84,11 +84,12 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   const fm = await A.send({ conv: 'dm:' + C.me.id, text: 'report', paths: [big] });
   const cf = await until('file offer', () => msgs(C, 'dm:' + A.me.id).find((m) => m.id === fm.id));
   assert.equal(cf.files[0].state, 'remote');
-  await C.download(cf.files[0].fid);
+  const picked = path.join(tmp, 'Chen', 'picked', 'my report.bin'); // what the "Save as" dialog would return
+  await C.download(cf.files[0].fid, picked);
   const done = await until('relay download', () => { const f = C.store.file(cf.files[0].fid); return f.state === 'done' && f; }, 20000);
   assert.equal(sha(done.path), sha(big));
-  assert.ok(done.path.startsWith(path.join(tmp, 'Chen', 'dl')));
-  ok('3 MB file pulled over relay, checksum matches');
+  assert.equal(done.path, picked);
+  ok('3 MB file pulled over relay to a chosen location, checksum matches');
   B.store.saveFile({ fid: cf.files[0].fid, msg: 'none', owner: A.me.id, name: 'report.bin', size: cf.files[0].size, state: 'remote' });
   const errs = []; B.on('event', (e, d) => { if (e === 'file' && d.error) errs.push(d.error); });
   await B.download(cf.files[0].fid);

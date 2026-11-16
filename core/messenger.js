@@ -491,7 +491,7 @@ class Messenger extends EventEmitter {
 
   // ------------------------------------------------------------------ files
   // Pull model, like IP Messenger: the message only announces files, the receiver asks for the data.
-  async download(fid) {
+  async download(fid, saveAs) {
     const f = this.store.file(fid);
     if (!f || f.owner === this.me.id) throw new Error('Unknown file');
     if (f.state === 'done' && f.path && fs.existsSync(f.path)) return;
@@ -499,8 +499,10 @@ class Messenger extends EventEmitter {
     if (!this.isOnline(this.peers.get(f.owner))) throw new Error('The sender is offline right now');
     const rel = safeRelPath(f.name);
     const auto = !!f.mime && f.size <= AUTO_IMAGE_MAX;
-    const target = auto ? path.join(this.dataDir, 'files', fid + path.extname(rel[rel.length - 1]).toLowerCase())
-      : uniquePath(this.cfg.downloadDir, rel);
+    // saveAs: the place the user picked in the "Save as" dialog; otherwise the default download folder.
+    const target = saveAs && path.isAbsolute(saveAs) ? saveAs
+      : auto ? path.join(this.dataDir, 'files', fid + path.extname(rel[rel.length - 1]).toLowerCase())
+        : uniquePath(this.cfg.downloadDir, rel);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const xid = C.rid(8);
     const d = { xid, fid, from: f.owner, target, tmp: target + '.part', size: f.size, got: 0, seq: 0, last: Date.now(), shown: 0 };
