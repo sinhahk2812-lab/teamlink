@@ -27,6 +27,9 @@ class Store {
     `);
     // added in 1.0.8: who has seen each message
     try { this.db.exec('ALTER TABLE messages ADD COLUMN read_by TEXT'); } catch {}
+    // added in 1.1.0: quoted replies and locked messages
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN quote TEXT'); } catch {}
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN locked INTEGER DEFAULT 0'); } catch {}
     this._stmts = new Map();
   }
 
@@ -75,6 +78,7 @@ class Store {
   static row(m) {
     if (!m) return m;
     for (const k of ['files', 'recipients', 'delivered', 'read_by']) m[k] = m[k] ? JSON.parse(m[k]) : [];
+    m.quote = m.quote ? JSON.parse(m.quote) : null;
     return m;
   }
   addMessage(m) {
@@ -82,6 +86,7 @@ class Store {
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
       m.id, m.conv, m.sender, m.ts, m.body || '', JSON.stringify(m.files || []), m.sealed ? 1 : 0, m.opened ? 1 : 0,
       m.auto ? 1 : 0, m.unread ? 1 : 0, JSON.stringify(m.recipients || []), JSON.stringify(m.delivered || []));
+    if (r.changes && (m.quote || m.locked)) this.run('UPDATE messages SET quote=?, locked=? WHERE id=?', m.quote ? JSON.stringify(m.quote) : null, m.locked ? 1 : 0, m.id);
     return r.changes > 0;
   }
   message(id) { return Store.row(this.get('SELECT * FROM messages WHERE id=?', id)); }

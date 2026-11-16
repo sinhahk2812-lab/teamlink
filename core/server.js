@@ -89,9 +89,10 @@ function startServer(messenger, { port = 0, token } = {}) {
   const methods = {
     getState: () => messenger.getState(),
     getMessages: (p) => messenger.getMessages(p),
-    send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, paths: (p.paths || []).map(String) }),
+    send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, locked: p.locked, replyTo: p.replyTo, paths: (p.paths || []).map(String) }),
     markRead: (p) => messenger.markRead(String(p.conv)),
-    openSealed: (p) => messenger.openSealed(String(p.id)),
+    openSealed: (p) => messenger.openSealed(String(p.id), p.password),
+    setLockPassword: (p) => messenger.setLockPassword(p),
     download: (p) => messenger.download(String(p.fid), p.saveAs ? String(p.saveAs) : undefined),
     search: (p) => messenger.search(p),
     createGroup: (p) => messenger.createGroup(p),

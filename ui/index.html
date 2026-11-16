@@ -47,11 +47,13 @@
       <div id="messages"></div>
       <div id="dropHint" hidden>Drop files to attach</div>
       <footer id="composer">
+        <div id="replyBar" hidden></div>
         <div id="attachments"></div>
         <div class="row">
           <button id="attachBtn" class="icon-btn" title="Attach files">📎</button>
           <button id="folderBtn" class="icon-btn" title="Attach a folder" hidden>📁</button>
           <button id="sealBtn" class="icon-btn" title="Sealed message: the receiver must click to open it and you are told when they do">🔒</button>
+          <button id="lockBtn" class="icon-btn" title="Locked message: the receiver must type their own lock password to open it">🔑</button>
           <textarea id="input" rows="1" placeholder="Write a message. Paste a screenshot with Ctrl+V."></textarea>
           <button id="sendBtn" class="primary">Send</button>
         </div>

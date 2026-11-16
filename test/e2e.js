@@ -74,6 +74,29 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await until('open notice', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === s1.id).readAt);
   ok('sealed message stays hidden until opened; sender gets the open notice');
 
+  // locked message: needs the receiver's own password
+  const l1 = await A.send({ conv: 'dm:' + B.me.id, text: 'bank OTP 554433', locked: true });
+  await until('locked arrives', () => msgs(B, 'dm:' + A.me.id).find((m) => m.id === l1.id));
+  assert.throws(() => B.openSealed(l1.id, 'x'), /Set your lock password/);
+  assert.throws(() => B.setLockPassword({ next: 'abc' }), /at least 4/);
+  B.setLockPassword({ next: 'bilal-secret' });
+  assert.throws(() => B.openSealed(l1.id, 'wrong'), /Wrong password/);
+  assert.ok(msgs(B, 'dm:' + A.me.id).find((m) => m.id === l1.id).hidden);
+  B.openSealed(l1.id, 'bilal-secret');
+  assert.equal(msgs(B, 'dm:' + A.me.id).find((m) => m.id === l1.id).body, 'bank OTP 554433');
+  await until('locked open notice', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === l1.id).readAt);
+  assert.throws(() => B.setLockPassword({ current: 'nope', next: 'new-one' }), /current password is wrong/);
+  assert.ok(!JSON.stringify(B.getState()).includes('bilal-secret') && !fs.readFileSync(path.join(tmp, 'Bilal', 'config.json'), 'utf8').includes('bilal-secret'));
+  ok('locked message opens only with the receiver\'s lock password');
+
+  // reply with quote
+  const r1 = await B.send({ conv: 'dm:' + A.me.id, text: 'Hello Asha', replyTo: m1.id });
+  const gotR = await until('quoted reply', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === r1.id));
+  assert.deepEqual(gotR.quote, { id: m1.id, sender: A.me.id, text: 'Hello Bilal' });
+  const r2 = await B.send({ conv: 'dm:' + A.me.id, text: 'no leak', replyTo: s1.id });
+  assert.equal(r2.quote, null);
+  ok('reply carries a quote of the original; sealed messages are never quoted');
+
   // groups
   const g = A.createGroup({ name: 'Design', members: [B.me.id, C.me.id] });
   await until('group sync', () => B.store.conv(g.id) && C.store.conv(g.id));

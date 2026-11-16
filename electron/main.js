@@ -19,6 +19,11 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(start).catch((e) => { dialog.showErrorBox('TeamLink could not start', String(e && e.stack || e)); app.exit(1); });
 }
 
+function openSend() {
+  showWindow();
+  if (win) win.webContents.send('openSend');
+}
+
 function showWindow() {
   if (!win) return;
   if (win.isMinimized()) win.restore();
@@ -59,11 +64,12 @@ async function start() {
     tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'tray.png')));
     tray.setToolTip('TeamLink');
     tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'New message…', click: openSend },
       { label: 'Open TeamLink', click: showWindow },
       { type: 'separator' },
       { label: 'Exit TeamLink completely…', click: confirmExit },
     ]));
-    tray.on('click', showWindow);
+    tray.on('click', openSend); // like IP Messenger: clicking the tray icon opens the send window
   } catch {}
 
   messenger.on('event', (name, d) => { if (name === 'incoming') onIncoming(d); else if (name === 'opened') onOpened(d); });

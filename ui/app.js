@@ -3,7 +3,7 @@
 const TOKEN = new URLSearchParams(location.search).get('token') || '';
 const desk = window.desktop || null;
 const $ = (id) => document.getElementById(id);
-const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, progress: new Map(), results: null };
+const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, locked: false, replyTo: null, progress: new Map(), results: null };
 
 // ---------------------------------------------------------------- tiny DOM helpers (text only, never innerHTML)
 function h(tag, props, ...kids) {
@@ -210,7 +210,7 @@ async function openConv(id, focusMsg) {
   if (id.startsWith('dm:') && !S.convs.has(id)) S.convs.set(id, { id, type: 'dm', members: [], unread: 0, last: null });
   const changed = S.active !== id;
   S.active = id;
-  if (changed) { S.pending = []; S.sealed = false; renderPending(); }
+  if (changed) { S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); }
   document.body.classList.add('in-chat');
   $('empty').hidden = true; $('chat').hidden = false;
   renderSide(); renderHead();
@@ -253,8 +253,10 @@ function renderHead() {
   $('chatMenuBtn').hidden = c.type === 'all';
   $('sealBtn').hidden = c.type !== 'dm';
   $('sealBtn').classList.toggle('on', S.sealed);
+  $('lockBtn').hidden = c.type !== 'dm';
+  $('lockBtn').classList.toggle('on', S.locked);
   $('composer').hidden = !!c.left;
-  $('input').placeholder = S.sealed ? 'Sealed message: the receiver must click to open it.' : 'Write a message. Paste a screenshot with Ctrl+V.';
+  $('input').placeholder = S.locked ? 'Locked message: the receiver must type their lock password to open it.' : S.sealed ? 'Sealed message: the receiver must click to open it.' : 'Write a message. Paste a screenshot with Ctrl+V.';
 }
 
 function linkify(text) {
@@ -293,7 +295,7 @@ function fileNode(m, f) {
 // In the desktop app every download first asks where to save it; cancelling the dialog cancels the download.
 async function downloadFile(f) {
   let saveAs;
-  if (desk) {
+  if (desk && S.me.config.askSave !== false) {
     saveAs = await desk.pickSave(f.name.split(/[\\/]/).pop());
     if (!saveAs) return;
   }
@@ -303,9 +305,11 @@ async function downloadFile(f) {
 function msgNode(m, c, showWho) {
   const bubble = h('div', { class: 'bubble' });
   if (m.hidden) {
-    bubble.append(h('div', { class: 'sealed-card' }, '🔒 Sealed message', h('button', { onclick: () => call('openSealed', { id: m.id }) }, 'Open')));
+    bubble.append(h('div', { class: 'sealed-card' }, m.locked ? '🔑 Locked message' : '🔒 Sealed message',
+      h('button', { onclick: () => (m.locked ? openLocked(m) : call('openSealed', { id: m.id })) }, 'Open')));
   } else {
-    if (m.sealed) bubble.append(h('span', { class: 'tag' }, '🔒 Sealed'));
+    if (m.sealed) bubble.append(h('span', { class: 'tag' }, m.locked ? '🔑 Locked' : '🔒 Sealed'));
+    if (m.quote) bubble.append(h('span', { class: 'quote', onclick: () => jumpTo(m.quote.id) }, h('b', null, memberName(c, m.quote.sender)), h('span', null, m.quote.text)));
     if (m.auto) bubble.append(h('span', { class: 'tag' }, 'Automatic reply'));
     if (m.body) bubble.append(...linkify(m.body));
     for (const f of m.files) bubble.append(fileNode(m, f));
@@ -317,7 +321,47 @@ function msgNode(m, c, showWho) {
     else meta += ` · Delivered to ${m.delivered} of ${m.recipients}` + (m.seen ? ` · Seen by ${m.seen}` : '');
   }
   return h('div', { class: 'msg' + (m.mine ? ' mine' : ''), 'data-id': m.id },
-    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), bubble, h('div', { class: 'meta' }, meta));
+    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), bubble,
+    h('div', { class: 'meta' }, meta, !m.hidden && !m.sealed && !c.left && h('button', { class: 'reply', title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩ Reply')));
+}
+
+function jumpTo(id) {
+  const el = document.querySelector(`[data-id="${CSS.escape(id)}"]`);
+  if (!el) return toast('That message is further back in the history');
+  el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2000);
+}
+
+function renderReply() {
+  const m = S.replyTo, c = S.convs.get(S.active);
+  $('replyBar').hidden = !m;
+  if (!m || !c) return;
+  $('replyBar').replaceChildren(h('span', { class: 'rtext' }, h('b', null, 'Replying to ' + memberName(c, m.sender) + ': '), m.body.trim() || 'Attachment'),
+    h('button', { title: 'Cancel reply', onclick: () => { S.replyTo = null; renderReply(); } }, '×'));
+}
+
+// Locked message: the receiver proves it is really them by typing their own lock password.
+function lockPasswordDialog(after) {
+  const cur = S.me.hasLock ? h('input', { type: 'password', autocomplete: 'off' }) : null;
+  const next = h('input', { type: 'password', autocomplete: 'off' }), again = h('input', { type: 'password', autocomplete: 'off' });
+  modal(S.me.hasLock ? 'Change lock password' : 'Set your lock password', [
+    h('p', { class: 'hint' }, 'You type this password to open locked messages people send you. It stays on this computer; nobody else needs to know it.'),
+    ...(cur ? field('Current password', cur) : []), ...field('New password', next), ...field('Repeat new password', again),
+  ], { label: 'Save', run: async () => {
+    if (next.value !== again.value) { toast('The two passwords do not match'); throw new Error('mismatch'); }
+    await call('setLockPassword', { current: cur ? cur.value : '', next: next.value });
+    S.me.hasLock = true;
+    toast('Lock password saved');
+    if (after) setTimeout(after, 0);
+  } });
+  (cur || next).focus();
+}
+function openLocked(m) {
+  if (!S.me.hasLock) return lockPasswordDialog(() => openLocked(m));
+  const pw = h('input', { type: 'password', autocomplete: 'off' });
+  modal('Locked message', [...field('Your lock password', pw, 'The sender is told when you open it.')],
+    { label: 'Open', run: () => call('openSealed', { id: m.id, password: pw.value }) });
+  pw.focus();
+  pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('modalCard').querySelector('.actions .primary').click(); });
 }
 
 function renderMessages(toBottom) {
@@ -390,16 +434,17 @@ async function send() {
   if (!text.trim() && !S.pending.length) return;
   sending = true; $('sendBtn').disabled = true;
   try {
-    await call('send', { conv: S.active, text, sealed: S.sealed, paths: S.pending.map((a) => a.path) });
+    await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, paths: S.pending.map((a) => a.path) });
     $('input').value = ''; autoGrow();
-    S.pending = []; S.sealed = false; renderPending(); renderHead();
+    S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); renderHead();
   } catch {} finally { sending = false; $('sendBtn').disabled = false; $('input').focus(); }
 }
 function autoGrow() { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, 140) + 'px'; }
 $('input').addEventListener('input', autoGrow);
 $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 $('sendBtn').addEventListener('click', send);
-$('sealBtn').addEventListener('click', () => { S.sealed = !S.sealed; renderHead(); });
+$('sealBtn').addEventListener('click', () => { S.sealed = !S.sealed; if (!S.sealed) S.locked = false; renderHead(); });
+$('lockBtn').addEventListener('click', () => { S.locked = !S.locked; S.sealed = S.locked || S.sealed; renderHead(); });
 $('attachBtn').addEventListener('click', async () => { if (desk) addPaths(await desk.pickFiles()); else $('fileInput').click(); });
 $('folderBtn').hidden = !desk;
 $('folderBtn').addEventListener('click', async () => addPaths(await desk.pickFolder()));
@@ -456,6 +501,9 @@ $('meBtn').addEventListener('click', () => {
   modal('Your profile', [
     ...field('Display name', name), ...field('Department', dept, 'Teammates are grouped by department in the member list.'),
     ...field('Status', status), ...field('Away message', msg, 'While you are away, people who message you get this as an automatic reply.'),
+    h('label', null, 'Lock password'),
+    h('button', { class: 'ghost', type: 'button', onclick: () => lockPasswordDialog() }, S.me.hasLock ? 'Change lock password' : 'Set lock password'),
+    h('p', { class: 'hint' }, 'Needed to open locked (🔑) messages that people send you.'),
     h('p', { class: 'hint code' }, 'Your ID: ' + S.me.id),
   ], { label: 'Save', run: () => call('setProfile', { name: name.value, dept: dept.value, status: status.value, absenceMsg: msg.value }) });
 });
@@ -469,6 +517,7 @@ function openSettings() {
   const dl = h('input', { type: 'text', value: c.downloadDir });
   const autostart = desk ? h('input', { type: 'checkbox' }) : null;
   const popup = desk ? h('input', { type: 'checkbox', checked: c.popup !== false }) : null;
+  const askSave = desk ? h('input', { type: 'checkbox', checked: c.askSave !== false }) : null;
   if (desk) desk.getAutostart().then((v) => { autostart.checked = v; });
   modal('Settings', [
     h('h3', null, 'Team'),
@@ -480,12 +529,13 @@ function openSettings() {
     ...field('Extra addresses to search', extra, 'One IP or broadcast address per line, for other subnets or VPNs where automatic discovery does not reach.'),
     h('h3', null, 'Files'),
     ...field('Save received files to', dl),
+    desk && h('label', null, askSave, ' Ask where to save each file (off: save straight to the folder above)'),
     desk && h('label', null, popup, ' Show a popup on screen when a message arrives'),
     desk && h('label', null, autostart, ' Start TeamLink when I sign in to this computer'),
     desk && h('h3', null, 'Updates'),
     desk && updateRow(),
   ], { label: 'Save', run: async () => {
-    await call('setConfig', { teamCode: team.value, relayUrl: relay.value, relayToken: token.value, extraPeers: extra.value, downloadDir: dl.value, popup: popup ? popup.checked : undefined });
+    await call('setConfig', { teamCode: team.value, relayUrl: relay.value, relayToken: token.value, extraPeers: extra.value, downloadDir: dl.value, popup: popup ? popup.checked : undefined, askSave: askSave ? askSave.checked : undefined });
     if (desk) desk.setAutostart(autostart.checked);
   } });
 }
@@ -522,6 +572,7 @@ function multiDialog() {
   const pick = h('div', { class: 'pick', onchange: () => { const n = picked().length; count.textContent = n ? `${n} selected. Each person gets a private message.` : 'Nobody selected yet.'; } }, boxes);
   const text = h('textarea', { rows: 4, maxLength: 20000, placeholder: 'Write your message' });
   const sealed = h('input', { type: 'checkbox' });
+  const lockBox = h('input', { type: 'checkbox' });
   // attachments: real paths in the desktop app, local uploads in browser mode
   const files = [];
   const chips = h('div', { id: 'multiFiles' });
@@ -550,12 +601,13 @@ function multiDialog() {
     ...field('Message', text),
     attachRow, chips,
     h('label', null, sealed, ' 🔒 Sealed: each person must click to open it, and you see when they do'),
+    h('label', null, lockBox, ' 🔑 Locked: each person must also type their own lock password'),
   ], { label: 'Send', run: async () => {
     const ids = picked();
     if (!ids.length) { toast('Pick at least one person'); throw new Error('none'); }
     if (files.some((f) => !f.path)) { toast('Still adding attachments…'); throw new Error('busy'); }
     if (!text.value.trim() && !files.length) { toast('Write a message or attach a file first'); throw new Error('empty'); }
-    for (const id of ids) await call('send', { conv: 'dm:' + id, text: text.value, sealed: sealed.checked, paths: files.map((f) => f.path) });
+    for (const id of ids) await call('send', { conv: 'dm:' + id, text: text.value, sealed: sealed.checked, locked: lockBox.checked, paths: files.map((f) => f.path) });
     toast(`Sent to ${ids.length} ${ids.length === 1 ? 'person' : 'people'}`);
   } });
 }
@@ -595,6 +647,7 @@ function updateRow() {
   return h('div', null, updLine, h('button', { class: 'ghost', type: 'button', onclick: async () => { upd = await desk.checkUpdate(); renderUpdate(); } }, 'Check for updates'));
 }
 if (desk && desk.onOpenConv) desk.onOpenConv((conv) => openConv(conv));
+if (desk && desk.onOpenSend) desk.onOpenSend(() => { if (S.me && S.me.config.teamCode) multiDialog(); });
 if (desk && desk.getUpdate) {
   desk.getUpdate().then((u) => { upd = u; renderUpdate(); });
   desk.onUpdate((u) => { upd = u; renderUpdate(); });

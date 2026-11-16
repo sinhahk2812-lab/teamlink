@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
+const nodeCrypto = require('crypto');
 const C = require('./crypto');
 const { Store } = require('./store');
 const { Lan } = require('./lan');
@@ -50,7 +51,7 @@ class Messenger extends EventEmitter {
     try { saved = JSON.parse(fs.readFileSync(this.cfgPath, 'utf8')); } catch {}
     this.cfg = {
       name: os.userInfo().username, dept: '', status: 'online', absenceMsg: '',
-      teamCode: '', relayUrl: '', relayToken: '', extraPeers: [], popup: true,
+      teamCode: '', relayUrl: '', relayToken: '', extraPeers: [], popup: true, askSave: true,
       udpPort: 24250, tcpPort: 0, downloadDir: path.join(os.homedir(), 'Downloads', 'TeamLink'),
       ...saved, ...overrides,
     };
@@ -298,7 +299,7 @@ class Messenger extends EventEmitter {
     return id;
   }
 
-  async send({ conv: convId, text, sealed, paths, auto }) {
+  async send({ conv: convId, text, sealed, locked, replyTo, paths, auto }) {
     if (convId.startsWith('dm:')) { if (!this.peers.has(convId.slice(3))) throw new Error('Unknown member'); this.ensureDm(convId.slice(3)); }
     const conv = this.store.conv(convId);
     if (!conv) throw new Error('Unknown conversation');
@@ -310,11 +311,16 @@ class Messenger extends EventEmitter {
     if (files.length > 2000) throw new Error('Too many files (max 2000 per message)');
     const id = C.rid(), ts = Date.now();
     const recipients = this.recipientsOf(conv);
-    const isSealed = !!sealed && conv.type === 'dm';
-    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, opened: 1, auto, recipients });
+    // A locked message is a sealed message that additionally needs the receiver's own password to open.
+    const isLocked = !!locked && conv.type === 'dm';
+    const isSealed = (!!sealed || isLocked) && conv.type === 'dm';
+    let quote = null;
+    const q = replyTo ? this.store.message(String(replyTo)) : null;
+    if (q && q.conv === convId && !q.sealed) quote = { id: q.id, sender: q.sender, text: q.body.trim().slice(0, 200) || 'Attachment' };
+    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, opened: 1, auto, recipients });
     for (const f of files) this.store.saveFile({ ...f, msg: id, owner: this.me.id, state: 'local' });
     this.store.touchConv(convId, ts);
-    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, auto: !!auto,
+    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, locked: isLocked, quote, auto: !!auto,
       files: files.map(({ fid, name, size, mime }) => ({ fid, name, size, mime })) };
     for (const r of recipients) this.deliver(r, frame);
     const view = this.msgView(this.store.message(id));
@@ -347,7 +353,12 @@ class Messenger extends EventEmitter {
     const ts = Math.min(Number(f.ts) || Date.now(), Date.now());
     const sealed = !!f.sealed && f.conv === 'dm';
     const files = Array.isArray(f.files) ? f.files.slice(0, 2000) : [];
-    const fresh = this.store.addMessage({ id: f.id, conv: convId, sender: from, ts, body: String(f.body || '').slice(0, 20000), sealed, auto: !!f.auto, unread: 1 });
+    let quote = null;
+    if (f.quote && typeof f.quote === 'object' && /^[0-9a-f]{20}$/.test(String(f.quote.sender))) {
+      quote = { id: String(f.quote.id || '').slice(0, 64), sender: f.quote.sender, text: String(f.quote.text || '').slice(0, 200) };
+    }
+    const fresh = this.store.addMessage({ id: f.id, conv: convId, sender: from, ts, body: String(f.body || '').slice(0, 20000), sealed,
+      locked: sealed && !!f.locked, quote, auto: !!f.auto, unread: 1 });
     this.ack(from, f.id);
     if (!fresh) return;
     for (const x of files) {
@@ -375,9 +386,32 @@ class Messenger extends EventEmitter {
     }
   }
 
-  openSealed(id) {
+  // ---- lock password (for opening locked messages). Only a salted scrypt hash is stored.
+  lockHash(password, salt) { return nodeCrypto.scryptSync(String(password), Buffer.from(salt, 'hex'), 32).toString('hex'); }
+
+  checkLockPassword(password) {
+    const l = this.cfg.lock;
+    if (!l) return false;
+    const a = Buffer.from(this.lockHash(password, l.salt), 'hex'), b = Buffer.from(l.hash, 'hex');
+    return a.length === b.length && nodeCrypto.timingSafeEqual(a, b);
+  }
+
+  setLockPassword({ current, next }) {
+    if (this.cfg.lock && !this.checkLockPassword(current || '')) throw new Error('The current password is wrong');
+    if (String(next || '').length < 4) throw new Error('The password must be at least 4 characters long');
+    const salt = nodeCrypto.randomBytes(16).toString('hex');
+    this.cfg.lock = { salt, hash: this.lockHash(next, salt) };
+    this.saveCfg();
+    this.ev('me', this.meView());
+  }
+
+  openSealed(id, password) {
     const m = this.store.message(id);
     if (!m || !m.sealed || m.opened || m.sender === this.me.id) return;
+    if (m.locked) {
+      if (!this.cfg.lock) throw new Error('Set your lock password first');
+      if (!this.checkLockPassword(password || '')) throw new Error('Wrong password');
+    }
     this.store.run('UPDATE messages SET opened=1, read_at=? WHERE id=?', Date.now(), id);
     this.deliver(m.sender, { t: 'read', id: 'r:' + id, mid: id });
     const fresh = this.store.message(id);
@@ -423,7 +457,7 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, quote: hidden ? null : m.quote, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {
@@ -622,8 +656,9 @@ class Messenger extends EventEmitter {
     this.ev('me', this.meView());
   }
 
-  async setConfig({ teamCode, relayUrl, relayToken, extraPeers, downloadDir, popup }) {
+  async setConfig({ teamCode, relayUrl, relayToken, extraPeers, downloadDir, popup, askSave }) {
     const c = this.cfg;
+    if (askSave !== undefined) c.askSave = !!askSave;
     if (popup !== undefined) c.popup = !!popup;
     const netBefore = JSON.stringify([c.teamCode, c.relayUrl, c.relayToken, c.extraPeers]);
     if (teamCode !== undefined) {
@@ -651,8 +686,8 @@ class Messenger extends EventEmitter {
 
   meView() {
     const c = this.cfg;
-    return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(),
-      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false } };
+    return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(), hasLock: !!c.lock,
+      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false } };
   }
 
   getState() {
