@@ -2,7 +2,7 @@ name: Build installers
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
+    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -30,9 +30,14 @@ jobs:
             dist/*.exe
             dist/*.dmg
             dist/*.AppImage
-      - if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - id: ver
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      # Publishes the installers on the repository's Releases page as v<version from package.json>.
+      - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: TeamLink ${{ steps.ver.outputs.version }}
           files: |
             dist/*.exe
             dist/*.dmg

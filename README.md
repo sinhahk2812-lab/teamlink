@@ -51,7 +51,8 @@ npm run dist
 
 This produces an installer for the system you run it on (`.exe` on Windows, `.dmg` on macOS,
 `.AppImage` on Linux) in `dist/`. A macOS build has to be made on a Mac and a Windows build
-on Windows; `.github/workflows/build.yml` builds all three on GitHub Actions when you push a `v*` tag.
+on Windows; `.github/workflows/build.yml` builds all three on GitHub Actions on every push to `main` and publishes them on the
+repository's Releases page under the version from `package.json`.
 
 The installers are not code-signed. Windows SmartScreen and macOS Gatekeeper will warn on first launch
 (on macOS: right-click the app and choose Open). Buy signing certificates if you want to remove the warnings.
