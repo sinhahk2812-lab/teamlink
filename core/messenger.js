@@ -50,7 +50,7 @@ class Messenger extends EventEmitter {
     try { saved = JSON.parse(fs.readFileSync(this.cfgPath, 'utf8')); } catch {}
     this.cfg = {
       name: os.userInfo().username, dept: '', status: 'online', absenceMsg: '',
-      teamCode: '', relayUrl: '', relayToken: '', extraPeers: [],
+      teamCode: '', relayUrl: '', relayToken: '', extraPeers: [], popup: true,
       udpPort: 24250, tcpPort: 0, downloadDir: path.join(os.homedir(), 'Downloads', 'TeamLink'),
       ...saved, ...overrides,
     };
@@ -603,8 +603,9 @@ class Messenger extends EventEmitter {
     this.ev('me', this.meView());
   }
 
-  async setConfig({ teamCode, relayUrl, relayToken, extraPeers, downloadDir }) {
+  async setConfig({ teamCode, relayUrl, relayToken, extraPeers, downloadDir, popup }) {
     const c = this.cfg;
+    if (popup !== undefined) c.popup = !!popup;
     const netBefore = JSON.stringify([c.teamCode, c.relayUrl, c.relayToken, c.extraPeers]);
     if (teamCode !== undefined) {
       const code = String(teamCode).trim().slice(0, 100);
@@ -632,7 +633,7 @@ class Messenger extends EventEmitter {
   meView() {
     const c = this.cfg;
     return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(),
-      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort } };
+      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false } };
   }
 
   getState() {

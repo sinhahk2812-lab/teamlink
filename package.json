@@ -1,6 +1,6 @@
 {
   "name": "teamlink",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Serverless LAN messenger for teams, with optional relay for remote members",
   "main": "electron/main.js",
   "license": "MIT",
@@ -58,7 +58,8 @@
       "runAfterFinish": true,
       "createDesktopShortcut": true,
       "shortcutName": "TeamLink"
-    }
+    },
+    "icon": "build/icon.png"
   },
   "homepage": "https://github.com/sinhahk2812-lab/teamlink",
   "repository": {

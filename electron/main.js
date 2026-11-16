@@ -1,6 +1,6 @@
 'use strict';
 // Desktop shell: starts the engine in this process and shows its UI in a window, with a tray icon.
-const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { Messenger } = require('../core/messenger');
@@ -8,15 +8,9 @@ const { startServer } = require('../core/server');
 
 let win = null, tray = null, messenger = null, server = null, exiting = false;
 
-// Tray icon drawn in code (a teal disc), so the app ships without binary assets.
-function trayIcon() {
-  const size = 32, buf = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const d = Math.hypot(x - 15.5, y - 15.5), a = Math.max(0, Math.min(1, 14.5 - d));
-    buf.set([0x88 * a, 0x94 * a, 0x0d * a, 255 * a], (y * size + x) * 4); // premultiplied BGRA
-  }
-  return nativeImage.createFromBitmap(buf, { width: size, height: size, scaleFactor: 2 });
-}
+// Windows only shows notifications and groups taskbar windows correctly when this matches the installer's appId.
+app.setAppUserModelId('team.teamlink.app');
+const ICON = path.join(__dirname, 'icon.png');
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -44,7 +38,7 @@ async function start() {
   const origin = `http://127.0.0.1:${server.port}`;
 
   win = new BrowserWindow({
-    width: 1080, height: 720, minWidth: 380, minHeight: 480, title: 'TeamLink', autoHideMenuBar: true, show: !startHidden,
+    width: 1080, height: 720, minWidth: 380, minHeight: 480, title: 'TeamLink', icon: ICON, autoHideMenuBar: true, show: !startHidden,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: true },
   });
   win.loadURL(server.url);
@@ -62,7 +56,7 @@ async function start() {
   powerMonitor.on('shutdown', exitApp);
 
   try {
-    tray = new Tray(trayIcon());
+    tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'tray.png')));
     tray.setToolTip('TeamLink');
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Open TeamLink', click: showWindow },
@@ -72,8 +66,8 @@ async function start() {
     tray.on('click', showWindow);
   } catch {}
 
-  messenger.on('event', (name) => { if (name === 'incoming' && !win.isFocused()) win.flashFrame(true); });
-  win.on('focus', () => win.flashFrame(false));
+  messenger.on('event', (name, d) => { if (name === 'incoming') onIncoming(d); });
+  win.on('focus', () => { win.flashFrame(false); hidePopup(); });
   win.on('hide', installIfReady);
   setupUpdates();
 
@@ -84,6 +78,59 @@ async function start() {
   }
   app.on('activate', showWindow);
 }
+
+// ------------------------------------------------------------------ message popup
+// Like IP Messenger: a new message pops up in the corner of the screen, on top of other programs,
+// and stays there until it is clicked (opens the chat) or dismissed.
+const POPUP_W = 380, POPUP_H = 120;
+let popup = null, popupReady = false, popupData = null, popupCount = 0;
+
+function onIncoming(d) {
+  if (win.isVisible() && win.isFocused()) return; // already looking at TeamLink
+  win.flashFrame(true);
+  if (messenger.cfg.popup === false) return;
+  const conv = messenger.convView(messenger.store.conv(d.conv));
+  const peer = messenger.peers.get(d.from);
+  const who = (peer && peer.name) || 'Someone';
+  popupCount += 1;
+  popupData = { conv: d.conv, count: popupCount, body: (conv.last && conv.last.preview) || 'New message',
+    title: conv.type === 'dm' ? who : `${who} · ${conv.type === 'all' ? 'Everyone' : conv.name || 'Group'}` };
+  showPopup();
+  shell.beep();
+}
+
+function showPopup() {
+  if (!popup || popup.isDestroyed()) {
+    popupReady = false;
+    popup = new BrowserWindow({ width: POPUP_W, height: POPUP_H, frame: false, resizable: false, minimizable: false, maximizable: false,
+      fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, show: false, title: 'TeamLink message', icon: ICON,
+      webPreferences: { preload: path.join(__dirname, 'popup-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    popup.setAlwaysOnTop(true, 'pop-up-menu');
+    popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    popup.webContents.on('will-navigate', (e) => e.preventDefault());
+    popup.loadFile(path.join(__dirname, 'popup.html'));
+  }
+  const area = screen.getPrimaryDisplay().workArea;
+  popup.setBounds({ x: area.x + area.width - POPUP_W - 16, y: area.y + area.height - POPUP_H - 16, width: POPUP_W, height: POPUP_H });
+  if (popupReady) popup.webContents.send('popupData', popupData);
+  popup.showInactive(); // never steals the keyboard from what the user is typing in
+}
+
+function hidePopup() {
+  popupCount = 0;
+  if (popup && !popup.isDestroyed()) popup.hide();
+}
+
+const fromPopup = (e) => !!popup && !popup.isDestroyed() && e.sender === popup.webContents;
+ipcMain.on('popupReady', (e) => { if (fromPopup(e)) { popupReady = true; if (popupData) e.sender.send('popupData', popupData); } });
+ipcMain.on('popupClose', (e) => { if (fromPopup(e)) hidePopup(); });
+ipcMain.on('popupOpen', (e) => {
+  if (!fromPopup(e) || !popupData) return;
+  const conv = popupData.conv;
+  hidePopup();
+  showWindow();
+  win.webContents.send('openConv', conv);
+});
 
 const fromUi = (e) => !!win && e.sender === win.webContents;
 // Only files the engine already knows about may be opened from the UI.

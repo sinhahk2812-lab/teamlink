@@ -467,6 +467,7 @@ function openSettings() {
   const extra = h('textarea', { rows: 2, value: (c.extraPeers || []).join('\n'), placeholder: '192.168.2.15\n10.0.5.255' });
   const dl = h('input', { type: 'text', value: c.downloadDir });
   const autostart = desk ? h('input', { type: 'checkbox' }) : null;
+  const popup = desk ? h('input', { type: 'checkbox', checked: c.popup !== false }) : null;
   if (desk) desk.getAutostart().then((v) => { autostart.checked = v; });
   modal('Settings', [
     h('h3', null, 'Team'),
@@ -478,11 +479,12 @@ function openSettings() {
     ...field('Extra addresses to search', extra, 'One IP or broadcast address per line, for other subnets or VPNs where automatic discovery does not reach.'),
     h('h3', null, 'Files'),
     ...field('Save received files to', dl),
+    desk && h('label', null, popup, ' Show a popup on screen when a message arrives'),
     desk && h('label', null, autostart, ' Start TeamLink when I sign in to this computer'),
     desk && h('h3', null, 'Updates'),
     desk && updateRow(),
   ], { label: 'Save', run: async () => {
-    await call('setConfig', { teamCode: team.value, relayUrl: relay.value, relayToken: token.value, extraPeers: extra.value, downloadDir: dl.value });
+    await call('setConfig', { teamCode: team.value, relayUrl: relay.value, relayToken: token.value, extraPeers: extra.value, downloadDir: dl.value, popup: popup ? popup.checked : undefined });
     if (desk) desk.setAutostart(autostart.checked);
   } });
 }
@@ -542,6 +544,7 @@ function updateRow() {
   updLine = h('p', { class: 'hint' }, updateText());
   return h('div', null, updLine, h('button', { class: 'ghost', type: 'button', onclick: async () => { upd = await desk.checkUpdate(); renderUpdate(); } }, 'Check for updates'));
 }
+if (desk && desk.onOpenConv) desk.onOpenConv((conv) => openConv(conv));
 if (desk && desk.getUpdate) {
   desk.getUpdate().then((u) => { upd = u; renderUpdate(); });
   desk.onUpdate((u) => { upd = u; renderUpdate(); });
@@ -555,6 +558,7 @@ function updateTitle() {
   if (desk) desk.setUnread(n);
 }
 function notify(d) {
+  if (desk) return; // the desktop app shows its own on-screen popup
   if (document.hasFocus() && d.conv === S.active) return;
   const c = S.convs.get(d.conv);
   if (!c || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;

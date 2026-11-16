@@ -18,6 +18,7 @@ directly. People working from home can join through a small optional relay.
 | Absence mode | Away status with an automatic reply (once per person) |
 | Files and folders | Receiver pulls the file directly from the sender; folder structure is kept |
 | Screenshots | Paste with Ctrl+V / Cmd+V or drag and drop; images show inline |
+| Message popup | A new message pops up in the corner of the screen, on top of other programs, until clicked or dismissed |
 | Search | Full history is stored locally (SQLite) and searchable |
 | Encryption | End to end for every message and file, on LAN and through the relay |
 | Remote members | Optional relay server; LAN is always preferred when both are available |

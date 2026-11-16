@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('desktop', {
   getUpdate: () => ipcRenderer.invoke('getUpdate'),
   checkUpdate: () => ipcRenderer.invoke('checkUpdate'),
   installUpdate: () => ipcRenderer.invoke('installUpdate'),
+  onOpenConv: (cb) => ipcRenderer.on('openConv', (e, conv) => cb(conv)),
   onUpdate: (cb) => ipcRenderer.on('update', (e, state) => cb(state)),
   pathFor: (file) => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
 });
