@@ -62,6 +62,7 @@ function connect() {
     S.convs = new Map(st.convs.map((c) => [c.id, c]));
     renderAll();
     if (S.active) openConv(S.active);
+    else if (!S.me.config.teamCode && $('modal').hidden) openSettings(); // first run: ask for the team code straight away
   };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
@@ -123,11 +124,11 @@ function renderMe() {
   $('meStatus').textContent = S.me.status === 'away' ? 'Away' + (S.me.absenceMsg ? ' · ' + S.me.absenceMsg : '') : 'Online' + (S.me.dept ? ' · ' + S.me.dept : '');
   const b = $('banner');
   b.hidden = !!S.me.config.teamCode;
-  b.textContent = 'No team code set. Anyone on this network who installs the app can join. Click to set one.';
+  b.textContent = 'You are offline. Enter your team code to connect. Click here.';
 }
 
 function renderNet() {
-  const n = S.net, parts = [n.lan ? 'LAN on' : 'LAN discovery unavailable'];
+  const n = S.net, parts = [n.locked ? 'Offline: no team code' : n.lan ? 'LAN on' : 'LAN discovery unavailable'];
   if (n.relay === 'connected') parts.push('Relay connected');
   else if (n.relay && n.relay !== 'off') parts.push('Relay: ' + (n.relayError || 'connecting…'));
   $('net').textContent = parts.join(' · ');
@@ -460,7 +461,7 @@ $('meBtn').addEventListener('click', () => {
 
 function openSettings() {
   const c = S.me.config;
-  const team = h('input', { type: 'text', value: c.teamCode, maxLength: 100, placeholder: 'A secret phrase shared by your team' });
+  const team = h('input', { type: 'text', value: c.teamCode, maxLength: 100, placeholder: 'At least 8 characters, given to you by your team' });
   const relay = h('input', { type: 'text', value: c.relayUrl, placeholder: 'wss://relay.yourcompany.com' });
   const token = h('input', { type: 'password', value: c.relayToken });
   const extra = h('textarea', { rows: 2, value: (c.extraPeers || []).join('\n'), placeholder: '192.168.2.15\n10.0.5.255' });
@@ -469,7 +470,7 @@ function openSettings() {
   if (desk) desk.getAutostart().then((v) => { autostart.checked = v; });
   modal('Settings', [
     h('h3', null, 'Team'),
-    ...field('Team code', team, 'Everyone in the team must enter exactly the same code. Devices with a different code cannot see or message you.'),
+    ...field('Team code', team, 'Everyone in the team must enter exactly the same code. Without the right code a computer cannot see the team, join it or read anything. Keep it secret and never post it publicly.'),
     h('h3', null, 'Remote teammates (optional)'),
     ...field('Relay address', relay, 'Only needed for people outside the office network. Leave empty for LAN only.'),
     ...field('Relay token', token),

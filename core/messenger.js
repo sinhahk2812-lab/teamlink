@@ -99,7 +99,10 @@ class Messenger extends EventEmitter {
     this.lan.on('packet', (msg, rinfo) => this.onPresence(msg.toString(), 'lan', rinfo));
     this.lan.on('frame', (from, buf) => this.onFrame(from, buf));
     this.lan.on('warn', (w) => this.ev('warn', w));
-    await this.lan.start();
+    // No team code, no network: the app stays completely silent (no discovery, no listening port, no relay)
+    // until the user enters the team's code. There is no shared default that an outsider could use.
+    this.locked = !this.cfg.teamCode;
+    if (!this.locked) await this.lan.start();
 
     this.relay = new RelayClient({ url: this.cfg.relayUrl, token: this.cfg.relayToken, room: C.roomId(this.tKey), id: this.me.id });
     this.relay.on('status', () => {
@@ -110,7 +113,7 @@ class Messenger extends EventEmitter {
     this.relay.on('pres', (data) => this.onPresence(String(data), 'relay'));
     this.relay.on('frame', (from, buf) => this.onFrame(from, buf));
     this.relay.on('left', (id) => { const p = this.peers.get(id); if (p && p.relay) { p.relay = false; this.pushPeers(); } });
-    this.relay.start();
+    if (!this.locked) this.relay.start();
     this.hello('hello');
   }
 
@@ -209,7 +212,7 @@ class Messenger extends EventEmitter {
   }
 
   netState() {
-    return { relay: this.relay.state, relayError: this.relay.error, lan: this.lan.udpOk, tcpPort: this.lan.tcpPort };
+    return { locked: this.locked, relay: this.locked ? 'off' : this.relay.state, relayError: this.relay.error, lan: this.lan.udpOk, tcpPort: this.lan.tcpPort };
   }
 
   // ------------------------------------------------------------------ encrypted transport
@@ -603,7 +606,11 @@ class Messenger extends EventEmitter {
   async setConfig({ teamCode, relayUrl, relayToken, extraPeers, downloadDir }) {
     const c = this.cfg;
     const netBefore = JSON.stringify([c.teamCode, c.relayUrl, c.relayToken, c.extraPeers]);
-    if (teamCode !== undefined) c.teamCode = String(teamCode).trim().slice(0, 100);
+    if (teamCode !== undefined) {
+      const code = String(teamCode).trim().slice(0, 100);
+      if (code.length < 8) throw new Error('The team code must be at least 8 characters long');
+      c.teamCode = code;
+    }
     if (relayUrl !== undefined) {
       const u = String(relayUrl).trim();
       if (u && !/^wss?:\/\/[^\s]+$/i.test(u)) throw new Error('Relay address must start with ws:// or wss://');

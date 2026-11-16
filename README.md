@@ -108,7 +108,9 @@ Data (identity key, settings, history) lives in the per-user app data folder:
 - Each install creates an X25519 key pair. The user ID is a hash of the public key, so an ID cannot be faked.
 - Every pair of users derives an AES-256-GCM key (X25519 + HKDF, salted with the team code). All messages
   and file data use it, on the LAN and through the relay.
-- Devices that do not know the team code are ignored and cannot decrypt anything.
+- Devices that do not know the team code are ignored and cannot decrypt anything. The code is mandatory (at least
+  8 characters): until it is entered the app does no networking at all, so a fresh install from the public download
+  page cannot see or join any team.
 - Known limits: no forward secrecy (a stolen device key exposes that device's past traffic if it was recorded),
   history is stored unencrypted on each computer (use disk encryption), display names are not verified
   beyond team-code membership, and someone who knows the team code can join. Change the code when someone leaves.

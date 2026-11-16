@@ -41,6 +41,12 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await sleep(300);
   assert.ok(!peer(A, X) && !peer(X, A));
   ok('a device with a different team code stays invisible');
+  const N = new Messenger(path.join(tmp, 'NoCode'), { name: 'NoCode', udpPort: base, teamCode: '' });
+  await N.start();
+  assert.ok(N.netState().locked && !N.lan.udpOk && N.lan.tcpPort === 0);
+  await assert.rejects(N.setConfig({ teamCode: 'short' }), /at least 8/);
+  await N.stop();
+  ok('without a team code the app does no networking; short codes are refused');
 
   // direct messages + delivery receipt
   const m1 = await A.send({ conv: 'dm:' + B.me.id, text: 'Hello Bilal' });
