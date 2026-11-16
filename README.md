@@ -61,6 +61,19 @@ repository's Releases page under the version from `package.json`.
 The installers are not code-signed. Windows SmartScreen and macOS Gatekeeper will warn on first launch
 (on macOS: right-click the app and choose Open). Buy signing certificates if you want to remove the warnings.
 
+## Updates
+
+The installed app checks the project's GitHub Releases when it starts and every 4 hours.
+
+- **Windows and Linux (AppImage):** a new version downloads in the background and installs by itself the next time
+  the window is closed to the tray. If the window is open, a banner offers "restart and update".
+- **macOS:** unsigned apps cannot update themselves, so the app shows a banner that opens the download page.
+- Settings has a "Check for updates" button and shows the current version.
+
+This only works while the GitHub repository is **public**: a private repository's releases cannot be read by the app.
+
+To ship an update: raise `version` in `package.json`, push to `main`, and wait for the build to finish.
+
 ## Remote teammates (relay)
 
 Run the relay on any machine reachable from the internet (a small VPS is plenty):

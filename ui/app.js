@@ -478,6 +478,8 @@ function openSettings() {
     h('h3', null, 'Files'),
     ...field('Save received files to', dl),
     desk && h('label', null, autostart, ' Start TeamLink when I sign in to this computer'),
+    desk && h('h3', null, 'Updates'),
+    desk && updateRow(),
   ], { label: 'Save', run: async () => {
     await call('setConfig', { teamCode: team.value, relayUrl: relay.value, relayToken: token.value, extraPeers: extra.value, downloadDir: dl.value });
     if (desk) desk.setAutostart(autostart.checked);
@@ -507,6 +509,43 @@ function groupDialog(conv) {
 }
 $('newGroupBtn').addEventListener('click', () => groupDialog(null));
 $('groupEditBtn').addEventListener('click', () => groupDialog(S.convs.get(S.active)));
+
+// ---------------------------------------------------------------- updates (desktop app only)
+let upd = null, updLine = null;
+function updateText() {
+  if (!upd) return '';
+  const v = 'Version ' + upd.current;
+  switch (upd.status) {
+    case 'dev': return v + ' (development copy, updates are off)';
+    case 'checking': return v + ' · checking for updates…';
+    case 'latest': return v + ' · you have the latest version';
+    case 'downloading': return `${v} · downloading ${upd.version} (${upd.percent}%)`;
+    case 'ready': return `${v} · ${upd.version} is ready to install`;
+    case 'available': return `${v} · ${upd.version} is available`;
+    case 'error': return v + ' · could not check for updates: ' + upd.error;
+    default: return v;
+  }
+}
+function renderUpdate() {
+  if (updLine) updLine.textContent = updateText();
+  const b = $('updateBanner');
+  const action = upd && (upd.status === 'ready' || upd.status === 'available');
+  b.hidden = !(upd && (action || upd.status === 'downloading'));
+  b.classList.toggle('action', !!action);
+  if (!upd) return;
+  b.textContent = upd.status === 'ready' ? `TeamLink ${upd.version} is ready. Click to restart and update.`
+    : upd.status === 'available' ? `TeamLink ${upd.version} is available. Click to download it.`
+      : `Downloading update ${upd.version}… ${upd.percent}%`;
+}
+function updateRow() {
+  updLine = h('p', { class: 'hint' }, updateText());
+  return h('div', null, updLine, h('button', { class: 'ghost', type: 'button', onclick: async () => { upd = await desk.checkUpdate(); renderUpdate(); } }, 'Check for updates'));
+}
+if (desk && desk.getUpdate) {
+  desk.getUpdate().then((u) => { upd = u; renderUpdate(); });
+  desk.onUpdate((u) => { upd = u; renderUpdate(); });
+  $('updateBanner').addEventListener('click', () => { if (upd && (upd.status === 'ready' || upd.status === 'available')) desk.installUpdate(); });
+}
 
 // ---------------------------------------------------------------- notifications
 function updateTitle() {

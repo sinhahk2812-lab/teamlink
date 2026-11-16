@@ -33,13 +33,18 @@ function showWindow() {
 }
 
 async function start() {
+  // After a silent self-update the app comes back the way it was: hidden in the tray.
+  const hiddenOnce = path.join(app.getPath('userData'), 'start-hidden-once');
+  const startHidden = process.argv.includes('--hidden') || fs.existsSync(hiddenOnce);
+  fs.rmSync(hiddenOnce, { force: true });
+
   messenger = new Messenger(app.getPath('userData'));
   await messenger.start();
   server = await startServer(messenger);
   const origin = `http://127.0.0.1:${server.port}`;
 
   win = new BrowserWindow({
-    width: 1080, height: 720, minWidth: 380, minHeight: 480, title: 'TeamLink', autoHideMenuBar: true, show: !process.argv.includes('--hidden'),
+    width: 1080, height: 720, minWidth: 380, minHeight: 480, title: 'TeamLink', autoHideMenuBar: true, show: !startHidden,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: true },
   });
   win.loadURL(server.url);
@@ -69,6 +74,8 @@ async function start() {
 
   messenger.on('event', (name) => { if (name === 'incoming' && !win.isFocused()) win.flashFrame(true); });
   win.on('focus', () => win.flashFrame(false));
+  win.on('hide', installIfReady);
+  setupUpdates();
 
   // Installed app: start with the computer by default, once. It can be switched off in Settings.
   const marker = path.join(app.getPath('userData'), 'autostart-set');
@@ -128,3 +135,62 @@ function exitApp() {
 }
 
 app.on('window-all-closed', () => {});
+
+// ------------------------------------------------------------------ updates
+// New versions come from the project's GitHub Releases. Windows and Linux download and install them
+// by themselves; unsigned macOS builds cannot self-install, so there the app only points to the download.
+const RELEASES = 'https://github.com/sinhahk2812-lab/teamlink/releases/latest';
+const canSelfInstall = process.platform !== 'darwin';
+let updater = null;
+const update = { current: app.getVersion(), status: app.isPackaged ? 'idle' : 'dev', version: '', percent: 0, error: '', canSelfInstall };
+
+function setUpdate(patch) {
+  Object.assign(update, patch);
+  if (win && !win.isDestroyed()) win.webContents.send('update', update);
+}
+
+function setupUpdates() {
+  if (!app.isPackaged) return;
+  try { updater = require('electron-updater').autoUpdater; } catch (e) { return setUpdate({ status: 'error', error: e.message }); }
+  updater.autoDownload = canSelfInstall;
+  updater.autoInstallOnAppQuit = canSelfInstall;
+  updater.on('checking-for-update', () => setUpdate({ status: 'checking', error: '' }));
+  updater.on('update-not-available', () => setUpdate({ status: 'latest' }));
+  updater.on('update-available', (info) => setUpdate({ status: canSelfInstall ? 'downloading' : 'available', version: info.version, percent: 0 }));
+  updater.on('download-progress', (p) => setUpdate({ status: 'downloading', percent: Math.round(p.percent) }));
+  updater.on('update-downloaded', (info) => { setUpdate({ status: 'ready', version: info.version }); installIfReady(); });
+  updater.on('error', (e) => setUpdate({ status: 'error', error: String((e && e.message) || e).split('\n')[0].slice(0, 200) }));
+  setTimeout(checkNow, 15000);
+  setInterval(checkNow, 4 * 3600 * 1000);
+}
+
+function checkNow() {
+  if (!updater || ['checking', 'downloading', 'ready'].includes(update.status)) return;
+  updater.checkForUpdates()
+    .then((r) => { if (!r && update.status !== 'error') setUpdate({ status: 'error', error: 'this kind of install cannot update itself' }); })
+    .catch((e) => setUpdate({ status: 'error', error: String((e && e.message) || e).split('\n')[0].slice(0, 200) }));
+}
+
+// A downloaded update installs by itself as soon as nobody is looking at the window.
+function installIfReady() {
+  if (update.status === 'ready' && win && !win.isVisible()) installUpdate(true);
+}
+
+function installUpdate(comeBackHidden) {
+  if (!updater || update.status !== 'ready' || exiting) return;
+  exiting = true;
+  if (comeBackHidden) { try { fs.writeFileSync(path.join(app.getPath('userData'), 'start-hidden-once'), '1'); } catch {} }
+  Promise.resolve().then(() => { server && server.close(); return messenger && messenger.stop(); }).catch(() => {})
+    .finally(() => updater.quitAndInstall(true, true));
+}
+
+ipcMain.handle('getUpdate', () => update);
+ipcMain.handle('checkUpdate', (e) => {
+  if (fromUi(e)) checkNow();
+  return update;
+});
+ipcMain.handle('installUpdate', (e) => {
+  if (!fromUi(e)) return;
+  if (update.status === 'available') shell.openExternal(RELEASES);
+  else installUpdate(false);
+});

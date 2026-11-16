@@ -38,7 +38,10 @@ jobs:
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: TeamLink ${{ steps.ver.outputs.version }}
+          # The .yml and .blockmap files are what the in-app updater reads; they must be in the release.
           files: |
             dist/*.exe
             dist/*.dmg
             dist/*.AppImage
+            dist/*.yml
+            dist/*.blockmap
