@@ -437,14 +437,14 @@ function modal(title, body, action, extra) {
   const close = () => { $('modal').hidden = true; };
   const ok = h('button', { class: action.danger ? 'ghost danger' : 'primary', onclick: async () => { try { await action.run(); close(); } catch {} } }, action.label);
   if (action.danger) ok.style.marginRight = '0';
-  $('modalCard').replaceChildren(h('h2', null, title), ...body, h('div', { class: 'actions' }, extra, h('button', { class: 'ghost', onclick: close }, 'Cancel'), ok));
+  $('modalCard').replaceChildren(h('h2', null, title), ...body.filter(Boolean), h('div', { class: 'actions' }, extra, h('button', { class: 'ghost', onclick: close }, 'Cancel'), ok));
   $('modal').hidden = false;
   const first = $('modalCard').querySelector('input[type=text], textarea');
   if (first) first.focus();
 }
 $('modal').addEventListener('mousedown', (e) => { if (e.target === $('modal')) $('modal').hidden = true; });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('modal').hidden = true; $('viewer').hidden = true; } });
-const field = (label, input, hint) => [h('label', null, label), input, hint && h('p', { class: 'hint' }, hint)];
+const field = (label, input, hint) => [h('label', null, label), input, ...(hint ? [h('p', { class: 'hint' }, hint)] : [])];
 
 $('meBtn').addEventListener('click', () => {
   const name = h('input', { type: 'text', value: S.me.name, maxLength: 40 });
@@ -510,6 +510,31 @@ function groupDialog(conv) {
     else { const g = await call('createGroup', { name: name.value, members: picked() }); S.convs.set(g.id, g); openConv(g.id); }
   } }, leave);
 }
+// One message to a few chosen people. Each of them gets it as a normal private message
+// (they do not see who else received it), unlike a group where everyone sees everything.
+function multiDialog() {
+  const people = [...S.peers.values()].sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
+  const boxes = people.map((p) => h('label', null, h('input', { type: 'checkbox', value: p.id }), avatar(p.id, p.name, dotOf(p)),
+    h('span', null, p.name + (p.dept ? ' · ' + p.dept : '') + (p.online ? '' : ' (offline)'))));
+  const picked = () => boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+  const count = h('p', { class: 'hint' }, 'Nobody selected yet.');
+  const pick = h('div', { class: 'pick', onchange: () => { const n = picked().length; count.textContent = n ? `${n} selected. Each person gets a private message.` : 'Nobody selected yet.'; } }, boxes);
+  const text = h('textarea', { rows: 4, maxLength: 20000, placeholder: 'Write your message' });
+  const sealed = h('input', { type: 'checkbox' });
+  modal('Message several people', [
+    h('label', null, 'Send to'),
+    people.length ? pick : h('p', { class: 'hint' }, 'No teammates found yet.'), count,
+    ...field('Message', text),
+    h('label', null, sealed, ' 🔒 Sealed: each person must click to open it, and you see when they do'),
+  ], { label: 'Send', run: async () => {
+    const ids = picked();
+    if (!ids.length) { toast('Pick at least one person'); throw new Error('none'); }
+    if (!text.value.trim()) { toast('Write a message first'); throw new Error('empty'); }
+    for (const id of ids) await call('send', { conv: 'dm:' + id, text: text.value, sealed: sealed.checked });
+    toast(`Sent to ${ids.length} ${ids.length === 1 ? 'person' : 'people'}`);
+  } });
+}
+$('multiBtn').addEventListener('click', multiDialog);
 $('newGroupBtn').addEventListener('click', () => groupDialog(null));
 $('groupEditBtn').addEventListener('click', () => groupDialog(S.convs.get(S.active)));
 
