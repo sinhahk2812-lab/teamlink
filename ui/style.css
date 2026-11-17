@@ -151,3 +151,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 #replyBar .rtext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
 #replyBar .rtext b { color: var(--accent); }
 #replyBar button { border: 0; background: none; color: var(--dim); font-size: 16px; }
+
+.shot-wrap { display: inline-block; max-width: 100%; white-space: normal; }
+.shot-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); margin: 0 0 4px; }
+.shot-bar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shot-bar button, .shot-bar a { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 6px; padding: 2px 10px; font-size: 12.5px; text-decoration: none; cursor: pointer; flex: none; }
+.shot-bar button:hover, .shot-bar a:hover { background: var(--accent); color: #fff; }
+#viewerSave { position: fixed; top: 16px; right: 16px; cursor: pointer; }

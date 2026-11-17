@@ -138,7 +138,11 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   const im = await A.send({ conv: 'dm:' + B.me.id, paths: [png] });
   const img = await until('image auto download', () => { const f = B.store.filesOf(im.id)[0]; return f && f.state === 'done' && f; });
   assert.equal(sha(img.path), sha(png));
-  ok('pasted image is fetched automatically');
+  const copy = path.join(tmp, 'Bilal', 'saved logo.png');
+  await B.saveCopy(img.fid, copy);
+  assert.equal(sha(copy), sha(png));
+  await assert.rejects(B.saveCopy('nope', copy));
+  ok('pasted image is fetched automatically and can be saved elsewhere');
 
   const dir = path.join(tmp, 'project'); fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'a.txt'), 'A'); fs.writeFileSync(path.join(dir, 'src', 'b.txt'), 'BB');

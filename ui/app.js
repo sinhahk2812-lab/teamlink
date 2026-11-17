@@ -275,7 +275,13 @@ const fileUrl = (fid, dl) => `/file/${fid}?token=${TOKEN}${dl ? '&dl=1' : ''}`;
 function fileNode(m, f) {
   const prog = S.progress.get(f.fid);
   const ready = f.state === 'local' || f.state === 'done';
-  if (f.image && ready) return h('img', { class: 'shot', src: fileUrl(f.fid), alt: f.name, title: f.name, loading: 'lazy', onclick: () => { $('viewerImg').src = fileUrl(f.fid); $('viewer').hidden = false; } });
+  if (f.image && ready) {
+    const base = f.name.split(/[\\/]/).pop();
+    return h('div', { class: 'shot-wrap' },
+      h('img', { class: 'shot', src: fileUrl(f.fid), alt: f.name, title: 'Click to enlarge', loading: 'lazy', onclick: () => { viewing = f; $('viewerImg').src = fileUrl(f.fid); $('viewer').hidden = false; } }),
+      h('div', { class: 'shot-bar' }, h('span', { title: base }, `${base} · ${fmtSize(f.size)}`),
+        desk ? h('button', { onclick: () => saveImage(f) }, 'Save') : h('a', { href: fileUrl(f.fid, true), download: base }, 'Save')));
+  }
   let sub = fmtSize(f.size), action = null, bar = null;
   if (prog && prog.state === 'downloading') {
     sub += ` · ${Math.round((prog.progress || 0) * 100)}%`;
@@ -300,6 +306,16 @@ async function downloadFile(f) {
     if (!saveAs) return;
   }
   call('download', { fid: f.fid, saveAs }).catch(() => {});
+}
+
+// Save a copy of an image shown in the chat (received or sent) to a place the user picks.
+let viewing = null;
+async function saveImage(f) {
+  if (!desk) { const a = h('a', { href: fileUrl(f.fid, true), download: f.name.split(/[\\/]/).pop() }); document.body.append(a); a.click(); a.remove(); return; }
+  const saveAs = await desk.pickSave(f.name.split(/[\\/]/).pop());
+  if (!saveAs) return;
+  await call('saveCopy', { fid: f.fid, saveAs });
+  toast('Image saved');
 }
 
 function msgNode(m, c, showWho) {
@@ -468,6 +484,7 @@ window.addEventListener('drop', (e) => {
   if (S.active) addFiles([...e.dataTransfer.files]);
 });
 $('viewer').addEventListener('click', () => { $('viewer').hidden = true; });
+$('viewerSave').addEventListener('click', (e) => { e.stopPropagation(); if (viewing) saveImage(viewing).catch(() => {}); });
 $('backBtn').addEventListener('click', closeChat);
 $('chatMenuBtn').addEventListener('click', () => {
   const c = S.convs.get(S.active);

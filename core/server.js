@@ -93,6 +93,7 @@ function startServer(messenger, { port = 0, token } = {}) {
     markRead: (p) => messenger.markRead(String(p.conv)),
     openSealed: (p) => messenger.openSealed(String(p.id), p.password),
     setLockPassword: (p) => messenger.setLockPassword(p),
+    saveCopy: (p) => messenger.saveCopy(String(p.fid), String(p.saveAs || '')),
     download: (p) => messenger.download(String(p.fid), p.saveAs ? String(p.saveAs) : undefined),
     search: (p) => messenger.search(p),
     createGroup: (p) => messenger.createGroup(p),

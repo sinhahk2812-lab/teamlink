@@ -570,6 +570,15 @@ class Messenger extends EventEmitter {
     if (!(await this.sendJson(f.owner, { t: 'fget', fid, xid }))) this.endDownload(d, 'The sender is offline right now');
   }
 
+  // Save a copy of a file that is already on this computer (an image shown in the chat) somewhere the user chose.
+  async saveCopy(fid, target) {
+    const f = this.store.file(String(fid));
+    if (!f || !f.path || !['local', 'done'].includes(f.state) || !fs.existsSync(f.path)) throw new Error('The file is not on this computer yet');
+    if (!target || !path.isAbsolute(target)) throw new Error('Choose where to save the file');
+    await fs.promises.copyFile(f.path, target);
+    return target;
+  }
+
   fileState(f, state, progress, error) {
     if (state !== 'downloading') this.store.saveFile({ ...f, state });
     this.ev('file', { fid: f.fid, msg: f.msg, state, progress, error, path: state === 'done' ? f.path : null });
