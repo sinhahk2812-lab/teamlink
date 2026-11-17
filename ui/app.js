@@ -318,6 +318,16 @@ async function saveImage(f) {
   toast('Image saved');
 }
 
+// Several files (or a folder) in one message: pick the folder once, everything lands there with its sub-folders.
+async function downloadAll(m) {
+  let dir;
+  if (desk && S.me.config.askSave !== false) {
+    dir = await desk.pickSaveFolder();
+    if (!dir) return;
+  }
+  call('downloadAll', { msg: m.id, dir }).catch(() => {});
+}
+
 function msgNode(m, c, showWho) {
   const bubble = h('div', { class: 'bubble' });
   if (m.hidden) {
@@ -329,6 +339,8 @@ function msgNode(m, c, showWho) {
     if (m.auto) bubble.append(h('span', { class: 'tag' }, 'Automatic reply'));
     if (m.body) bubble.append(...linkify(m.body));
     for (const f of m.files) bubble.append(fileNode(m, f));
+    const waiting = m.mine ? 0 : m.files.filter((f) => f.state === 'remote' && !(S.progress.get(f.fid) || {}).state).length;
+    if (waiting > 1) bubble.append(h('div', { class: 'file-all' }, h('button', { onclick: () => downloadAll(m) }, `Download all ${waiting} files`)));
   }
   let meta = fmtTime(m.ts);
   if (m.mine) {

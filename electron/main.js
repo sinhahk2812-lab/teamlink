@@ -153,12 +153,32 @@ const knownPath = (p) => !!messenger.store.get('SELECT 1 x FROM files WHERE path
 
 ipcMain.handle('pickFiles', async (e) => (fromUi(e) ? (await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] })).filePaths : []));
 ipcMain.handle('pickFolder', async (e) => (fromUi(e) ? (await dialog.showOpenDialog(win, { properties: ['openDirectory'] })).filePaths : []));
-ipcMain.handle('pickSave', async (e, name) => {
-  if (!fromUi(e)) return null;
+// Save dialogs open in the folder the user saved to last time (falling back to the download folder).
+function saveStartDir() {
+  const last = messenger.cfg.lastSaveDir;
+  if (last && fs.existsSync(last)) return last;
   const dir = messenger.cfg.downloadDir;
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
-  const r = await dialog.showSaveDialog(win, { title: 'Save file', defaultPath: path.join(dir, path.basename(String(name || 'file'))) });
-  return r.canceled ? null : r.filePath;
+  return dir;
+}
+function rememberSaveDir(dir) {
+  if (!dir || messenger.cfg.lastSaveDir === dir) return;
+  messenger.cfg.lastSaveDir = dir;
+  messenger.saveCfg();
+}
+ipcMain.handle('pickSave', async (e, name) => {
+  if (!fromUi(e)) return null;
+  const r = await dialog.showSaveDialog(win, { title: 'Save file', defaultPath: path.join(saveStartDir(), path.basename(String(name || 'file'))) });
+  if (r.canceled || !r.filePath) return null;
+  rememberSaveDir(path.dirname(r.filePath));
+  return r.filePath;
+});
+ipcMain.handle('pickSaveFolder', async (e) => {
+  if (!fromUi(e)) return null;
+  const r = await dialog.showOpenDialog(win, { title: 'Save all files to', buttonLabel: 'Save here', defaultPath: saveStartDir(), properties: ['openDirectory', 'createDirectory'] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  rememberSaveDir(r.filePaths[0]);
+  return r.filePaths[0];
 });
 ipcMain.handle('openPath', async (e, p) => {
   if (!fromUi(e) || !knownPath(p)) return;

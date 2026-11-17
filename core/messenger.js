@@ -571,6 +571,23 @@ class Messenger extends EventEmitter {
   }
 
   // Save a copy of a file that is already on this computer (an image shown in the chat) somewhere the user chose.
+  // Download every not-yet-downloaded file of one message into a folder, keeping sub-folders.
+  async downloadAll(msgId, dir) {
+    if (dir && !path.isAbsolute(dir)) throw new Error('Choose a folder');
+    const base = dir || this.cfg.downloadDir;
+    const taken = new Map(); // top-level name -> the name actually used, so one folder stays together
+    let started = 0;
+    for (const f of this.store.filesOf(String(msgId))) {
+      if (f.owner === this.me.id || f.state === 'done') continue;
+      const rel = safeRelPath(f.name);
+      if (!taken.has(rel[0])) taken.set(rel[0], path.relative(base, uniquePath(base, [rel[0]])));
+      const target = rel.length === 1 ? path.join(base, taken.get(rel[0])) : path.join(base, taken.get(rel[0]), ...rel.slice(1));
+      await this.download(f.fid, target);
+      started++;
+    }
+    return started;
+  }
+
   async saveCopy(fid, target) {
     const f = this.store.file(String(fid));
     if (!f || !f.path || !['local', 'done'].includes(f.state) || !fs.existsSync(f.path)) throw new Error('The file is not on this computer yet');

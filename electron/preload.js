@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('desktop', {
   pickFiles: () => ipcRenderer.invoke('pickFiles'),
   pickFolder: () => ipcRenderer.invoke('pickFolder'),
   pickSave: (name) => ipcRenderer.invoke('pickSave', name),
+  pickSaveFolder: () => ipcRenderer.invoke('pickSaveFolder'),
   openPath: (p) => ipcRenderer.invoke('openPath', p),
   showItem: (p) => ipcRenderer.invoke('showItem', p),
   setUnread: (n) => ipcRenderer.invoke('setUnread', n),

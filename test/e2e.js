@@ -148,10 +148,12 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   fs.writeFileSync(path.join(dir, 'a.txt'), 'A'); fs.writeFileSync(path.join(dir, 'src', 'b.txt'), 'BB');
   const dm = await A.send({ conv: 'dm:' + B.me.id, paths: [dir] });
   const offered = await until('folder offer', () => { const f = B.store.filesOf(dm.id); return f.length === 2 && f; });
-  for (const f of offered) await B.download(f.fid);
+  const chosen = path.join(tmp, 'Bilal', 'client work'); fs.mkdirSync(path.join(chosen, 'project'), { recursive: true }); // a "project" folder is already there
+  assert.equal(await B.downloadAll(dm.id, chosen), 2);
   await until('folder download', () => B.store.filesOf(dm.id).every((f) => f.state === 'done'));
-  assert.equal(fs.readFileSync(path.join(tmp, 'Bilal', 'dl', 'project', 'src', 'b.txt'), 'utf8'), 'BB');
-  ok('folder transfer keeps its structure');
+  assert.equal(fs.readFileSync(path.join(chosen, 'project (2)', 'src', 'b.txt'), 'utf8'), 'BB');
+  assert.equal(fs.readFileSync(path.join(chosen, 'project (2)', 'a.txt'), 'utf8'), 'A');
+  ok('download all: a folder lands in the chosen place with its structure, without overwriting');
 
   // absence auto reply
   B.setProfile({ status: 'away', absenceMsg: 'In a meeting till 4' });
