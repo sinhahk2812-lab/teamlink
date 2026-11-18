@@ -1,17 +1,25 @@
 :root {
   --bg: #f4f5f7; --panel: #ffffff; --side: #1f2937; --side-2: #2b3748; --side-text: #e5e7eb; --side-dim: #9ca3af;
-  --text: #111827; --dim: #6b7280; --line: #e5e7eb; --accent: #0d9488; --accent-2: #0f766e; --accent-soft: #ccfbf1;
-  --mine: #d9f5ef; --theirs: #ffffff; --danger: #dc2626; --online: #22c55e; --away: #f59e0b; --shadow: 0 1px 2px rgba(0,0,0,.08);
+  --text: #111827; --dim: #6b7280; --line: #e5e7eb; --theirs: #ffffff; --danger: #dc2626; --online: #22c55e; --away: #f59e0b; --shadow: 0 1px 2px rgba(0,0,0,.08);
+  /* The user's choices (Appearance dialog) override these three; everything else derives from them. */
+  --accent: #0d9488; --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --msg-size: 14px;
+  --accent-2: color-mix(in srgb, var(--accent) 82%, black);
+  --accent-soft: color-mix(in srgb, var(--accent) 20%, white);
+  --mine: color-mix(in srgb, var(--accent) 17%, white);
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111827; --panel: #1b2332; --side: #0b1220; --side-2: #172033; --text: #e5e7eb; --dim: #9ca3af; --line: #2a3447;
-    --accent-soft: #134e4a; --mine: #134e4a; --theirs: #1f2937; --shadow: none;
+  :root:not([data-theme="light"]) {
+    --bg: #111827; --panel: #1b2332; --side: #0b1220; --side-2: #172033; --text: #e5e7eb; --dim: #9ca3af; --line: #2a3447; --theirs: #1f2937; --shadow: none;
+    --accent-soft: color-mix(in srgb, var(--accent) 35%, #111827); --mine: color-mix(in srgb, var(--accent) 38%, #111827); color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #111827; --panel: #1b2332; --side: #0b1220; --side-2: #172033; --text: #e5e7eb; --dim: #9ca3af; --line: #2a3447; --theirs: #1f2937; --shadow: none;
+  --accent-soft: color-mix(in srgb, var(--accent) 35%, #111827); --mine: color-mix(in srgb, var(--accent) 38%, #111827); color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
-body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); overflow: hidden; }
+body { font: 14px/1.45 var(--font); color: var(--text); background: var(--bg); overflow: hidden; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 ul { list-style: none; margin: 0; padding: 0; }
@@ -73,7 +81,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .msg { display: flex; flex-direction: column; align-items: flex-start; margin: 3px 0; }
 .msg.mine { align-items: flex-end; }
 .msg .who { font-size: 12px; color: var(--dim); margin: 6px 4px 1px; }
-.bubble { max-width: min(560px, 82%); background: var(--theirs); border-radius: 12px; padding: 7px 11px; box-shadow: var(--shadow); overflow-wrap: anywhere; white-space: pre-wrap; }
+.bubble { font-size: var(--msg-size); max-width: min(560px, 82%); background: var(--theirs); border-radius: 12px; padding: 7px 11px; box-shadow: var(--shadow); overflow-wrap: anywhere; white-space: pre-wrap; }
 .msg.mine .bubble { background: var(--mine); }
 .msg.flash .bubble { outline: 2px solid var(--accent); }
 .bubble a { color: var(--accent); }
@@ -162,3 +170,25 @@ ul { list-style: none; margin: 0; padding: 0; }
 .file-all { white-space: normal; margin-top: 6px; }
 .file-all button { border: 0; background: var(--accent); color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
 .file-all button:hover { background: var(--accent-2); }
+
+#input { font-size: var(--msg-size); }
+/* chat wallpaper */
+body[data-wall="gradient"] #messages { background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 26%, var(--bg)), var(--bg) 55%, color-mix(in srgb, var(--accent) 14%, var(--bg))); }
+body[data-wall="dots"] #messages { background: radial-gradient(color-mix(in srgb, var(--accent) 40%, transparent) 1.5px, transparent 1.7px) 0 0 / 22px 22px, var(--bg); }
+body[data-wall="image"] #messages { background-size: cover; background-position: center; }
+body[data-wall]:not([data-wall="none"]) .day, body[data-wall]:not([data-wall="none"]) .meta, body[data-wall]:not([data-wall="none"]) .who, body[data-wall]:not([data-wall="none"]) .notice {
+  background: color-mix(in srgb, var(--bg) 78%, transparent); border-radius: 8px; padding: 1px 7px; width: fit-content; }
+body[data-wall]:not([data-wall="none"]) .day, body[data-wall]:not([data-wall="none"]) .notice { margin-left: auto; margin-right: auto; }
+/* appearance dialog */
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+.swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel) inset; }
+.swatches input[type=color] { width: 40px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+.range-row { display: flex; align-items: center; gap: 10px; }
+.range-row input[type=range] { flex: 1; accent-color: var(--accent); }
+.range-row output { width: 52px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+.avatar.photo { background-size: cover !important; background-position: center !important; }
+.photo-row { display: flex; align-items: center; gap: 10px; }
+.photo-row .avatar { width: 56px; height: 56px; font-size: 20px; }

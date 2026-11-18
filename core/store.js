@@ -27,6 +27,7 @@ class Store {
     `);
     // added in 1.0.8: who has seen each message
     try { this.db.exec('ALTER TABLE messages ADD COLUMN read_by TEXT'); } catch {}
+    try { this.db.exec('ALTER TABLE peers ADD COLUMN avatar TEXT'); } catch {} // 1.3.0: profile pictures
     // added in 1.1.0: quoted replies and locked messages
     try { this.db.exec('ALTER TABLE messages ADD COLUMN quote TEXT'); } catch {}
     try { this.db.exec('ALTER TABLE messages ADD COLUMN fwd INTEGER DEFAULT 0'); } catch {} // 1.2.0: forwarded
@@ -51,6 +52,7 @@ class Store {
       p.id, p.pub, p.name ?? null, p.dept ?? null, p.host ?? null, p.lastSeen ?? null);
   }
   peers() { return this.all('SELECT * FROM peers'); }
+  setPeerAvatar(id, hash) { this.run('UPDATE peers SET avatar=? WHERE id=?', hash || null, id); }
 
   // ---- conversations
   conv(id) {

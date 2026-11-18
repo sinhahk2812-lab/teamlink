@@ -25,6 +25,9 @@ function avatar(seed, label, dot) {
   const initials = String(label || '?').trim().split(/\s+/).slice(0, 2).map((w) => [...w][0] || '').join('').toUpperCase() || '?';
   const a = h('span', { class: 'avatar' }, initials);
   a.style.background = COLORS[n % COLORS.length];
+  // a profile picture, when this person has set one
+  const ver = S.me && seed === S.me.id ? S.me.avatar : (S.peers.get(seed) || {}).avatar;
+  if (ver) { a.textContent = ''; a.classList.add('photo'); a.style.backgroundImage = `url("/avatar/${seed}?token=${TOKEN}&v=${ver}")`; }
   if (dot) a.append(h('span', { class: 'dot ' + dot }));
   return a;
 }
@@ -119,7 +122,69 @@ const dotOf = (p) => (!p || !p.online ? 'off' : p.status === 'away' ? 'away' : '
 // ---------------------------------------------------------------- sidebar
 function renderAll() { renderMe(); renderNet(); renderSide(); updateTitle(); }
 
+// ---------------------------------------------------------------- appearance (theme, colour, font, size, wallpaper)
+const DEFAULT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+function applyAppearance(a) {
+  const root = document.documentElement;
+  if (a.mode === 'system') delete root.dataset.theme; else root.dataset.theme = a.mode;
+  root.style.setProperty('--accent', a.accent);
+  root.style.setProperty('--font', a.font ? `"${a.font}", ${DEFAULT_FONT}` : DEFAULT_FONT);
+  root.style.setProperty('--msg-size', a.msgSize + 'px');
+  root.style.zoom = a.zoom === 100 ? '' : String(a.zoom / 100);
+  document.body.dataset.wall = a.wall;
+  const veil = `color-mix(in srgb, var(--bg) ${a.dim}%, transparent)`;
+  $('messages').style.backgroundImage = a.wall === 'image' ? `linear-gradient(${veil}, ${veil}), url("/wallpaper?token=${TOKEN}&v=${a.wallVer}")` : '';
+}
+
+const ACCENTS = ['#0d9488', '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#475569'];
+const FONTS = ['', 'Segoe UI', 'Calibri', 'Arial', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Georgia', 'Times New Roman', 'Courier New', 'Comic Sans MS'];
+function appearanceDialog() {
+  const a = { ...S.me.config.appearance };
+  const save = (patch) => { Object.assign(a, patch); S.me.config.appearance = { ...a }; applyAppearance(a); rpc('setAppearance', patch).catch((e) => toast(e.message)); draw(); };
+  const mode = h('select', { onchange: () => save({ mode: mode.value }) }, h('option', { value: 'system' }, 'Same as the computer'), h('option', { value: 'light' }, 'Light'), h('option', { value: 'dark' }, 'Dark'));
+  const swatches = h('div', { class: 'swatches' });
+  const custom = h('input', { type: 'color', title: 'Any colour', onchange: () => save({ accent: custom.value }) });
+  const font = h('select', { onchange: () => { if (font.value === '?') { other.hidden = false; other.focus(); } else { other.hidden = true; save({ font: font.value }); } } },
+    ...FONTS.map((f) => h('option', { value: f }, f || 'Default')), h('option', { value: '?' }, 'Other font installed on this computer…'));
+  const other = h('input', { type: 'text', hidden: true, maxLength: 60, placeholder: 'Type the font name, e.g. Poppins', onchange: () => save({ font: other.value }) });
+  const slider = (key, min, max, unit) => {
+    const out = h('output', null, a[key] + unit);
+    const r = h('input', { type: 'range', min, max, step: 1, value: a[key], oninput: () => { out.textContent = r.value + unit; }, onchange: () => save({ [key]: Number(r.value) }) });
+    return h('div', { class: 'range-row' }, r, out);
+  };
+  const wall = h('select', { onchange: () => { if (wall.value === 'image' && !a.wallVer) return pick.click(); save({ wall: wall.value }); } },
+    h('option', { value: 'none' }, 'None'), h('option', { value: 'gradient' }, 'Soft colour gradient'), h('option', { value: 'dots' }, 'Dots'), h('option', { value: 'image' }, 'My own picture'));
+  const pick = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true, onchange: async () => {
+    const file = pick.files[0]; pick.value = '';
+    if (!file) return draw();
+    const r = await fetch(`/wallpaper?token=${TOKEN}`, { method: 'POST', headers: { 'content-type': file.type }, body: file });
+    if (!r.ok) { toast((await r.json().catch(() => ({}))).error || 'Could not use that picture'); return draw(); }
+    Object.assign(a, { wall: 'image', wallVer: Date.now() % 1e9 }); // the engine saved the same; refresh comes with its event
+    const st = await rpc('getState'); Object.assign(a, st.me.config.appearance); S.me = st.me; applyAppearance(a); draw();
+  } });
+  function draw() {
+    mode.value = a.mode; wall.value = a.wall; custom.value = a.accent;
+    if (FONTS.includes(a.font)) { font.value = a.font; other.hidden = true; } else { font.value = '?'; other.hidden = false; other.value = a.font; }
+    swatches.replaceChildren(...ACCENTS.map((c) => { const b = h('button', { class: 'swatch' + (c === a.accent ? ' on' : ''), type: 'button', title: c, onclick: () => save({ accent: c }) }); b.style.background = c; return b; }), custom);
+  }
+  draw();
+  modal('Appearance', [
+    h('p', { class: 'hint' }, 'Changes apply straight away and only on this computer.'),
+    ...field('Theme', mode),
+    h('label', null, 'Colour'), swatches,
+    ...field('Font', font), other,
+    h('label', null, 'Message text size'), slider('msgSize', 11, 26, ' px'),
+    h('label', null, 'Size of everything (zoom)'), slider('zoom', 75, 160, ' %'),
+    h('h3', null, 'Chat wallpaper'),
+    ...field('Background', wall),
+    h('div', { class: 'btn-row' }, h('button', { class: 'ghost', type: 'button', onclick: () => pick.click() }, 'Choose a picture…'), pick),
+    h('label', null, 'Fade the wallpaper (for easier reading)'), slider('dim', 0, 90, ' %'),
+  ], { label: 'Done', run: async () => {} },
+  h('button', { class: 'ghost danger', type: 'button', onclick: async () => { await call('setAppearance', { reset: true }); const st = await rpc('getState'); S.me = st.me; applyAppearance(S.me.config.appearance); $('modal').hidden = true; } }, 'Reset'));
+}
+
 function renderMe() {
+  applyAppearance(S.me.config.appearance);
   $('meAvatar').replaceWith(Object.assign(avatar(S.me.id, S.me.name, S.me.status === 'away' ? 'away' : 'online'), { id: 'meAvatar' }));
   $('meName').textContent = S.me.name;
   $('meStatus').textContent = S.me.status === 'away' ? 'Away' + (S.me.absenceMsg ? ' · ' + S.me.absenceMsg : '') : 'Online' + (S.me.dept ? ' · ' + S.me.dept : '');
@@ -551,12 +616,38 @@ const field = (label, input, hint) => [h('label', null, label), input, ...(hint 
 
 $('meBtn').addEventListener('click', () => {
   const name = h('input', { type: 'text', value: S.me.name, maxLength: 40 });
-  const dept = h('input', { type: 'text', value: S.me.dept, maxLength: 40, placeholder: 'e.g. Sales, Accounts, Design' });
+  // Department: pick one the team already uses (keeps the member list tidy), or type a new one.
+  const known = [...new Set([...S.peers.values()].map((p) => p.dept).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const deptCustom = h('input', { type: 'text', maxLength: 40, placeholder: 'Type your department, e.g. Video Editing', hidden: true });
+  const deptPick = h('select', { onchange: () => { deptCustom.hidden = deptPick.value !== '\u0000'; if (!deptCustom.hidden) deptCustom.focus(); } },
+    h('option', { value: '' }, 'No department'), ...known.map((d) => h('option', { value: d }, d)), h('option', { value: '\u0000' }, 'Custom department…'));
+  if (!S.me.dept || known.includes(S.me.dept)) deptPick.value = S.me.dept;
+  else { deptPick.value = '\u0000'; deptCustom.hidden = false; deptCustom.value = S.me.dept; }
+  const dept = { get value() { return deptPick.value === '\u0000' ? deptCustom.value : deptPick.value; } };
   const status = h('select', null, h('option', { value: 'online' }, 'Online'), h('option', { value: 'away' }, 'Away (absence mode)'));
   status.value = S.me.status;
   const msg = h('input', { type: 'text', value: S.me.absenceMsg, maxLength: 200, placeholder: 'e.g. In a meeting, back at 4 pm' });
+  // profile picture: cropped to a square and shrunk in the browser before it is sent to the team
+  const preview = h('span', null, avatar(S.me.id, S.me.name));
+  const photo = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true, onchange: async () => {
+    const file = photo.files[0]; photo.value = '';
+    if (!file) return;
+    try {
+      const bmp = await createImageBitmap(file), side = Math.min(bmp.width, bmp.height), cv = h('canvas', { width: 192, height: 192 });
+      cv.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 192, 192);
+      const blob = await new Promise((res) => cv.toBlob(res, 'image/jpeg', 0.86));
+      const r = await fetch(`/avatar?token=${TOKEN}`, { method: 'POST', body: blob });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Could not use that picture');
+      S.me = (await rpc('getState')).me; renderMe(); preview.replaceChildren(avatar(S.me.id, S.me.name));
+    } catch (e) { toast(e.message || 'Could not use that picture'); }
+  } });
+  const photoRow = h('div', { class: 'photo-row' }, preview,
+    h('button', { class: 'ghost', type: 'button', onclick: () => photo.click() }, 'Choose a photo…'),
+    h('button', { class: 'ghost', type: 'button', onclick: async () => { await call('removeAvatar'); S.me = (await rpc('getState')).me; renderMe(); preview.replaceChildren(avatar(S.me.id, S.me.name)); } }, 'Remove'), photo);
   modal('Your profile', [
-    ...field('Display name', name), ...field('Department', dept, 'Teammates are grouped by department in the member list.'),
+    h('label', null, 'Profile photo'), photoRow,
+    ...field('Display name', name), h('label', null, 'Department'), deptPick, deptCustom,
+    h('p', { class: 'hint' }, 'Teammates are grouped by department in the member list. The list shows departments your team already uses; choose Custom to add a new one.'),
     ...field('Status', status), ...field('Away message', msg, 'While you are away, people who message you get this as an automatic reply.'),
     h('label', null, 'Lock password'),
     h('button', { class: 'ghost', type: 'button', onclick: () => lockPasswordDialog() }, S.me.hasLock ? 'Change lock password' : 'Set lock password'),
@@ -578,6 +669,7 @@ function openSettings() {
   let autostartWas = null; // stays null until the real value is known, so saving never changes it by accident
   if (desk) desk.getAutostart().then((v) => { autostart.checked = v; autostartWas = v; });
   modal('Settings', [
+    h('button', { class: 'ghost', type: 'button', onclick: appearanceDialog }, '🎨 Appearance: theme, colour, font, text size, wallpaper…'),
     h('h3', null, 'Team'),
     ...field('Team code', team, 'Everyone in the team must enter exactly the same code. Without the right code a computer cannot see the team, join it or read anything. Keep it secret and never post it publicly.'),
     h('h3', null, 'Remote teammates (optional)'),
@@ -598,6 +690,7 @@ function openSettings() {
   } });
 }
 $('settingsBtn').addEventListener('click', openSettings);
+$('themeBtn').addEventListener('click', appearanceDialog);
 $('banner').addEventListener('click', openSettings);
 
 function groupDialog(conv) {

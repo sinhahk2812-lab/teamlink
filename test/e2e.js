@@ -48,6 +48,17 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await N.stop();
   ok('without a team code the app does no networking; short codes are refused');
 
+  // profile picture travels to LAN and relay members; clearing it clears it everywhere
+  const dp = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), crypto.randomBytes(20000)]);
+  A.setAvatar(dp);
+  await until('avatar sync', () => peer(B, A).avatar && peer(C, A).avatar);
+  assert.equal(peer(B, A).avatar, A.getState().me.avatar);
+  assert.ok(fs.readFileSync(B.avatarPath(A.me.id)).equals(dp) && fs.readFileSync(C.avatarPath(A.me.id)).equals(dp));
+  assert.throws(() => A.setAvatar(Buffer.from('<svg onload=alert(1)>')), /small PNG or JPG/);
+  A.setAvatar(null);
+  await until('avatar cleared', () => !peer(B, A).avatar && !fs.existsSync(B.avatarPath(A.me.id)));
+  ok('profile picture reaches teammates and can be removed');
+
   // direct messages + delivery receipt
   const m1 = await A.send({ conv: 'dm:' + B.me.id, text: 'Hello Bilal' });
   await until('dm delivery', () => msgs(B, 'dm:' + A.me.id).some((m) => m.body === 'Hello Bilal'));

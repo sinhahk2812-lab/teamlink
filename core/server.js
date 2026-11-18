@@ -45,6 +45,51 @@ function startServer(messenger, { port = 0, token } = {}) {
       return;
     }
 
+    // The user's own chat wallpaper: a picture kept in the data folder.
+    // Profile pictures: POST /avatar sets mine, GET /avatar/<id> shows anyone's.
+    if (url.pathname === '/avatar' && req.method === 'POST') {
+      if (!tokenOk(url.searchParams.get('token'))) return json(403, { error: 'forbidden' });
+      const chunks = []; let size = 0, tooBig = false;
+      req.on('data', (c) => { size += c.length; if (size > 200 * 1024) { tooBig = true; req.destroy(); } else chunks.push(c); });
+      req.on('end', () => { if (tooBig) return; try { messenger.setAvatar(Buffer.concat(chunks)); json(200, { ok: true }); } catch (e) { json(400, { error: e.message }); } });
+      return;
+    }
+    if (url.pathname.startsWith('/avatar/') && req.method === 'GET') {
+      if (!tokenOk(url.searchParams.get('token'))) return json(403, { error: 'forbidden' });
+      const id = url.pathname.slice(8);
+      const file = /^[0-9a-f]{20}$/.test(id) ? messenger.avatarPath(id) : '';
+      const buf = file && fs.existsSync(file) ? fs.readFileSync(file) : null;
+      const kind = buf && messenger.constructor.imageKind(buf);
+      if (!kind) return json(404, { error: 'not found' });
+      res.writeHead(200, { 'content-type': kind, 'content-length': buf.length });
+      return res.end(buf);
+    }
+
+    if (url.pathname === '/wallpaper') {
+      if (!tokenOk(url.searchParams.get('token'))) return json(403, { error: 'forbidden' });
+      const file = messenger.wallpaperPath();
+      const WALL = { 'image/png': 1, 'image/jpeg': 1, 'image/webp': 1 };
+      if (req.method === 'POST') {
+        const type = String(req.headers['content-type'] || '').split(';')[0];
+        if (!WALL[type]) return json(400, { error: 'Use a PNG, JPG or WebP picture' });
+        const chunks = []; let size = 0, tooBig = false;
+        req.on('data', (c) => { size += c.length; if (size > 20 * 1024 * 1024) { tooBig = true; req.destroy(); } else chunks.push(c); });
+        req.on('end', () => {
+          if (tooBig) return;
+          fs.writeFileSync(file, Buffer.concat(chunks));
+          messenger.cfg.wallType = type;
+          messenger.setAppearance({ wall: 'image', wallVer: Date.now() % 1e9 });
+          json(200, { ok: true });
+        });
+        return;
+      }
+      if (req.method === 'GET' && fs.existsSync(file)) {
+        res.writeHead(200, { 'content-type': WALL[messenger.cfg.wallType] ? messenger.cfg.wallType : 'image/png', 'content-length': fs.statSync(file).size });
+        return fs.createReadStream(file).pipe(res);
+      }
+      return json(404, { error: 'not found' });
+    }
+
     if (req.method === 'GET' && url.pathname.startsWith('/file/')) {
       if (!tokenOk(url.searchParams.get('token'))) return json(403, { error: 'forbidden' });
       const f = messenger.store.file(url.pathname.slice(6));
@@ -102,6 +147,8 @@ function startServer(messenger, { port = 0, token } = {}) {
     updateGroup: (p) => messenger.updateGroup(p),
     leaveGroup: (p) => messenger.leaveGroup(String(p.conv)),
     deleteConversation: (p) => messenger.deleteConversation(String(p.conv)),
+    removeAvatar: () => messenger.setAvatar(null),
+    setAppearance: (p) => messenger.setAppearance(p),
     setProfile: (p) => messenger.setProfile(p),
     setConfig: (p) => messenger.setConfig(p),
     refresh: () => messenger.hello('hello'),

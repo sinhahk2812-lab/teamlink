@@ -46,6 +46,7 @@ class Messenger extends EventEmitter {
     this.dataDir = dataDir;
     fs.mkdirSync(path.join(dataDir, 'files'), { recursive: true });
     fs.mkdirSync(path.join(dataDir, 'outgoing'), { recursive: true });
+    fs.mkdirSync(path.join(dataDir, 'avatars'), { recursive: true });
     this.cfgPath = path.join(dataDir, 'config.json');
     let saved = {};
     try { saved = JSON.parse(fs.readFileSync(this.cfgPath, 'utf8')); } catch {}
@@ -60,7 +61,7 @@ class Messenger extends EventEmitter {
     this.me = this.cfg.identity;
     this.store = new Store(dataDir);
     this.peers = new Map();
-    for (const p of this.store.peers()) this.peers.set(p.id, { id: p.id, pub: p.pub, name: p.name, dept: p.dept, host: p.host, lastSeen: p.last_seen, status: 'online', absenceMsg: '', lan: null, relay: false });
+    for (const p of this.store.peers()) this.peers.set(p.id, { id: p.id, pub: p.pub, name: p.name, dept: p.dept, host: p.host, lastSeen: p.last_seen, avatar: p.avatar || '', status: 'online', absenceMsg: '', lan: null, relay: false });
     if (!this.store.conv('all')) this.store.saveConv({ id: 'all', type: 'all', name: 'Everyone', members: [], updated: 0 });
     this.keys = new Map();
     this.flushing = new Set();
@@ -153,7 +154,7 @@ class Messenger extends EventEmitter {
   hello(type, only, target) {
     const body = JSON.stringify({
       v: 1, t: type, id: this.me.id, pub: this.me.pub, name: this.cfg.name, dept: this.cfg.dept,
-      host: os.hostname(), port: this.lan.tcpPort, st: this.cfg.status, am: this.cfg.absenceMsg, ts: Date.now(),
+      host: os.hostname(), port: this.lan.tcpPort, st: this.cfg.status, am: this.cfg.absenceMsg, av: this.cfg.avatar || '', ts: Date.now(),
     });
     const pkt = JSON.stringify({ b: body, m: C.mac(this.tKey, body) });
     if (target && target.rinfo) return this.lan.sendTo(Buffer.from(pkt), target.rinfo.address, target.rinfo.port);
@@ -185,9 +186,61 @@ class Messenger extends EventEmitter {
       else peer.relay = true;
       this.store.upsertPeer(peer);
       if (p.t === 'hello') this.hello('ack', null, via === 'lan' ? { rinfo } : { relayTo: p.id });
+      this.syncAvatar(peer, typeof p.av === 'string' && /^[0-9a-f]{16}$/.test(p.av) ? p.av : '');
     }
     this.pushPeers();
     if (!wasOnline && this.isOnline(peer)) this.flush(peer.id);
+  }
+
+  // ---- profile pictures. The presence packet only carries a short hash of the picture; a peer that
+  // does not have that picture yet asks for it over the encrypted channel.
+  static imageKind(buf) {
+    if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+    if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+    if (buf.length > 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+    return null;
+  }
+  avatarPath(id) { return id === this.me.id ? path.join(this.dataDir, 'avatar.img') : path.join(this.dataDir, 'avatars', id + '.img'); }
+
+  setAvatar(buf) {
+    if (!buf) { fs.rmSync(this.avatarPath(this.me.id), { force: true }); this.cfg.avatar = ''; }
+    else {
+      if (buf.length > 150 * 1024 || !Messenger.imageKind(buf)) throw new Error('Use a small PNG or JPG picture');
+      fs.writeFileSync(this.avatarPath(this.me.id), buf);
+      this.cfg.avatar = nodeCrypto.createHash('sha256').update(buf).digest('hex').slice(0, 16);
+    }
+    this.saveCfg();
+    this.hello('hello');
+    this.ev('me', this.meView());
+  }
+
+  syncAvatar(peer, hash) {
+    if (!hash) {
+      if (peer.avatar) { peer.avatar = ''; this.store.setPeerAvatar(peer.id, ''); fs.rmSync(this.avatarPath(peer.id), { force: true }); }
+      return;
+    }
+    if (hash === peer.avatar && fs.existsSync(this.avatarPath(peer.id))) return;
+    if (peer.avatarAsked === hash && Date.now() - peer.avatarAskedAt < 60000) return;
+    peer.avatarAsked = hash; peer.avatarAskedAt = Date.now();
+    this.sendJson(peer.id, { t: 'avget' });
+  }
+
+  onAvatarGet(from) {
+    const file = this.avatarPath(this.me.id);
+    if (!this.cfg.avatar || !fs.existsSync(file)) return;
+    this.sendJson(from, { t: 'av', h: this.cfg.avatar, d: fs.readFileSync(file).toString('base64') });
+  }
+
+  onAvatar(from, f) {
+    const peer = this.peers.get(from);
+    if (!peer || typeof f.d !== 'string' || f.d.length > 220 * 1024) return;
+    const buf = Buffer.from(f.d, 'base64');
+    const hash = nodeCrypto.createHash('sha256').update(buf).digest('hex').slice(0, 16);
+    if (hash !== peer.avatarAsked || !Messenger.imageKind(buf)) return; // only the picture we asked for, and only a real image
+    fs.writeFileSync(this.avatarPath(from), buf);
+    peer.avatar = hash;
+    this.store.setPeerAvatar(from, hash);
+    this.pushPeers();
   }
 
   knowPeer(id, pub, name) {
@@ -204,7 +257,7 @@ class Messenger extends EventEmitter {
 
   peerView(p) {
     return { id: p.id, name: p.name || 'User ' + p.id.slice(0, 6), dept: p.dept || '', host: p.host || '',
-      status: p.status, absenceMsg: p.absenceMsg, online: this.isOnline(p), via: p.lan ? 'lan' : p.relay ? 'relay' : null, lastSeen: p.lastSeen };
+      status: p.status, absenceMsg: p.absenceMsg, online: this.isOnline(p), via: p.lan ? 'lan' : p.relay ? 'relay' : null, lastSeen: p.lastSeen, avatar: p.avatar || '' };
   }
 
   pushPeers() {
@@ -271,7 +324,7 @@ class Messenger extends EventEmitter {
     let f;
     try { f = JSON.parse(plain.subarray(1).toString()); } catch { return; }
     try {
-      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd }[f.t];
+      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar }[f.t];
       if (handler) handler.call(this, from, f);
     } catch (e) {
       this.ev('warn', 'frame error: ' + e.message);
@@ -730,10 +783,35 @@ class Messenger extends EventEmitter {
     this.ev('net', this.netState());
   }
 
+  // ---- look and feel (per user, stored on this computer)
+  appearance() {
+    const a = this.cfg.appearance || {};
+    const num = (v, lo, hi, d) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : d);
+    return {
+      mode: ['light', 'dark'].includes(a.mode) ? a.mode : 'system',
+      accent: /^#[0-9a-f]{6}$/i.test(a.accent || '') ? a.accent.toLowerCase() : '#0d9488',
+      font: String(a.font || '').replace(/[^\w .\-]/g, '').trim().slice(0, 60),
+      msgSize: num(a.msgSize, 11, 26, 14),
+      zoom: num(a.zoom, 75, 160, 100),
+      wall: ['gradient', 'dots', 'image'].includes(a.wall) ? a.wall : 'none',
+      dim: num(a.dim, 0, 90, 35),
+      wallVer: num(a.wallVer, 0, 1e9, 0),
+    };
+  }
+
+  setAppearance(patch) {
+    this.cfg.appearance = patch && patch.reset ? {} : { ...this.appearance(), ...(patch || {}) };
+    this.cfg.appearance = this.appearance(); // normalise
+    this.saveCfg();
+    this.ev('me', this.meView());
+  }
+
+  wallpaperPath() { return path.join(this.dataDir, 'wallpaper.img'); }
+
   meView() {
     const c = this.cfg;
-    return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(), hasLock: !!c.lock,
-      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false } };
+    return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(), hasLock: !!c.lock, avatar: c.avatar || '',
+      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false, appearance: this.appearance() } };
   }
 
   getState() {
