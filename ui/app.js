@@ -132,6 +132,8 @@ function applyAppearance(a) {
   root.style.setProperty('--msg-size', a.msgSize + 'px');
   root.style.zoom = a.zoom === 100 ? '' : String(a.zoom / 100);
   document.body.dataset.wall = a.wall;
+  document.body.dataset.style = a.style;
+  document.body.dataset.motion = a.motion ? 'on' : 'off';
   const veil = `color-mix(in srgb, var(--bg) ${a.dim}%, transparent)`;
   $('messages').style.backgroundImage = a.wall === 'image' ? `linear-gradient(${veil}, ${veil}), url("/wallpaper?token=${TOKEN}&v=${a.wallVer}")` : '';
 }
@@ -142,6 +144,8 @@ function appearanceDialog() {
   const a = { ...S.me.config.appearance };
   const save = (patch) => { Object.assign(a, patch); S.me.config.appearance = { ...a }; applyAppearance(a); rpc('setAppearance', patch).catch((e) => toast(e.message)); draw(); };
   const mode = h('select', { onchange: () => save({ mode: mode.value }) }, h('option', { value: 'system' }, 'Same as the computer'), h('option', { value: 'light' }, 'Light'), h('option', { value: 'dark' }, 'Dark'));
+  const look = h('select', { onchange: () => save({ style: look.value }) }, h('option', { value: 'glass' }, 'Glass (see-through panels, moving colours)'), h('option', { value: 'solid' }, 'Solid (plain, lightest on old PCs)'));
+  const motion = h('input', { type: 'checkbox', onchange: () => save({ motion: motion.checked }) });
   const swatches = h('div', { class: 'swatches' });
   const custom = h('input', { type: 'color', title: 'Any colour', onchange: () => save({ accent: custom.value }) });
   const font = h('select', { onchange: () => { if (font.value === '?') { other.hidden = false; other.focus(); } else { other.hidden = true; save({ font: font.value }); } } },
@@ -163,7 +167,7 @@ function appearanceDialog() {
     const st = await rpc('getState'); Object.assign(a, st.me.config.appearance); S.me = st.me; applyAppearance(a); draw();
   } });
   function draw() {
-    mode.value = a.mode; wall.value = a.wall; custom.value = a.accent;
+    mode.value = a.mode; wall.value = a.wall; custom.value = a.accent; look.value = a.style; motion.checked = a.motion;
     if (FONTS.includes(a.font)) { font.value = a.font; other.hidden = true; } else { font.value = '?'; other.hidden = false; other.value = a.font; }
     swatches.replaceChildren(...ACCENTS.map((c) => { const b = h('button', { class: 'swatch' + (c === a.accent ? ' on' : ''), type: 'button', title: c, onclick: () => save({ accent: c }) }); b.style.background = c; return b; }), custom);
   }
@@ -171,6 +175,8 @@ function appearanceDialog() {
   modal('Appearance', [
     h('p', { class: 'hint' }, 'Changes apply straight away and only on this computer.'),
     ...field('Theme', mode),
+    ...field('Style', look),
+    h('label', null, motion, ' Animations'),
     h('label', null, 'Colour'), swatches,
     ...field('Font', font), other,
     h('label', null, 'Message text size'), slider('msgSize', 11, 26, ' px'),
@@ -283,6 +289,7 @@ async function openConv(id, focusMsg) {
   S.msgs = await call('getMessages', { conv: id, limit: focusMsg ? 200 : 80 });
   if (S.active !== id) return;
   renderMessages(true);
+  if (changed) { const box = $('messages'); box.classList.remove('swap'); void box.offsetWidth; box.classList.add('swap'); }
   if (focusMsg) {
     const el = document.querySelector(`[data-id="${CSS.escape(focusMsg)}"]`);
     if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2500); }
@@ -395,6 +402,19 @@ async function downloadAll(m) {
   call('downloadAll', { msg: m.id, dir }).catch(() => {});
 }
 
+// New messages pop in. The list is rebuilt on every update, so the animation is resumed from the
+// message's age instead of restarting each time.
+const freshAt = new Map();
+function freshClass(m, node) {
+  const born = freshAt.get(m.id);
+  if (!born) return node;
+  const age = Date.now() - born;
+  if (age > 420) { freshAt.delete(m.id); return node; }
+  node.classList.add('fresh');
+  node.style.setProperty('--age', `-${age}ms`);
+  return node;
+}
+
 function msgNode(m, c, showWho) {
   const bubble = h('div', { class: 'bubble' });
   if (m.hidden) {
@@ -424,8 +444,8 @@ function msgNode(m, c, showWho) {
   const acts = !m.hidden && !m.sealed && h('div', { class: 'acts' },
     !c.left && h('button', { title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩'),
     h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'));
-  return h('div', { class: 'msg' + (m.mine ? ' mine' : ''), 'data-id': m.id },
-    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts));
+  return freshClass(m, h('div', { class: 'msg' + (m.mine ? ' mine' : ''), 'data-id': m.id },
+    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts)));
 }
 
 // Forward a message (text and attachments) to people and groups.
@@ -512,6 +532,7 @@ function renderMessages(toBottom) {
 function onMessage(m) {
   if (m.conv !== S.active) return;
   const i = S.msgs.findIndex((x) => x.id === m.id);
+  if (i < 0) freshAt.set(m.id, Date.now());
   if (i >= 0) S.msgs[i] = m; else S.msgs.push(m);
   renderMessages(i < 0 && m.mine);
   if (i < 0 && !m.mine) markRead();
@@ -562,7 +583,7 @@ async function send() {
   sending = true; $('sendBtn').disabled = true;
   try {
     await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, paths: S.pending.map((a) => a.path) });
-    $('input').value = ''; autoGrow();
+    $('input').value = ''; autoGrow(); toggleEmoji(false);
     S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); renderHead();
   } catch {} finally { sending = false; $('sendBtn').disabled = false; $('input').focus(); }
 }
@@ -572,6 +593,68 @@ $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shif
 $('sendBtn').addEventListener('click', send);
 $('sealBtn').addEventListener('click', () => { S.sealed = !S.sealed; if (!S.sealed) S.locked = false; renderHead(); });
 $('lockBtn').addEventListener('click', () => { S.locked = !S.locked; S.sealed = S.locked || S.sealed; renderHead(); });
+// ---------------------------------------------------------------- emoji picker
+const emojiSections = [];
+function buildEmoji() {
+  if (emojiSections.length || !window.EMOJI) return;
+  const tabs = [h('button', { title: 'Recently used', 'data-i': 0 }, '🕘')];
+  const grid = $('emojiGrid');
+  const recent = h('section', null, h('h5', null, 'Recently used'), h('div', { class: 'egrid', id: 'emojiRecent' }));
+  grid.append(recent); emojiSections.push(recent);
+  window.EMOJI.forEach(([name, icon, lines], gi) => {
+    const cells = lines.split('\n').map((l) => { const [e, n] = l.split('|'); return h('button', { class: 'e', title: n, 'data-n': n }, e); });
+    const sec = h('section', null, h('h5', null, name), h('div', { class: 'egrid' }, cells));
+    grid.append(sec); emojiSections.push(sec);
+    tabs.push(h('button', { title: name, 'data-i': gi + 1 }, icon));
+  });
+  grid.append(h('section', { id: 'emojiFound', hidden: true }, h('h5', null, 'Results'), h('div', { class: 'egrid' })));
+  $('emojiTabs').append(...tabs);
+  drawRecentEmoji();
+}
+function drawRecentEmoji() {
+  const list = (S.me && S.me.config.recentEmoji) || [];
+  $('emojiRecent').replaceChildren(...list.map((e) => h('button', { class: 'e' }, e)));
+  emojiSections[0].hidden = !list.length || !!$('emojiSearch').value.trim();
+}
+function toggleEmoji(show) {
+  const pop = $('emojiPop');
+  const open = show === undefined ? pop.hidden : show;
+  if (open) { buildEmoji(); drawRecentEmoji(); }
+  pop.hidden = !open;
+  $('emojiBtn').classList.toggle('on', open);
+  if (open && !matchMedia('(max-width: 720px)').matches) $('emojiSearch').focus();
+}
+function insertEmoji(e) {
+  const t = $('input'), a = t.selectionStart ?? t.value.length, b = t.selectionEnd ?? t.value.length;
+  t.value = t.value.slice(0, a) + e + t.value.slice(b);
+  t.selectionStart = t.selectionEnd = a + e.length;
+  autoGrow();
+  const list = [e, ...((S.me.config.recentEmoji || []).filter((x) => x !== e))].slice(0, 24);
+  S.me.config.recentEmoji = list;
+  rpc('setRecentEmoji', { list }).catch(() => {});
+}
+$('emojiBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleEmoji(); });
+$('emojiGrid').addEventListener('click', (e) => { const b = e.target.closest('button.e'); if (b) insertEmoji(b.textContent); });
+$('emojiTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  $('emojiSearch').value = ''; filterEmoji();
+  const sec = emojiSections[Number(b.dataset.i)];
+  if (sec && !sec.hidden) $('emojiGrid').scrollTop = sec.offsetTop - $('emojiGrid').offsetTop;
+});
+function filterEmoji() {
+  const q = $('emojiSearch').value.trim().toLowerCase(), found = $('emojiFound');
+  for (const sec of emojiSections) sec.hidden = !!q;
+  found.hidden = !q;
+  if (!q) return drawRecentEmoji();
+  const hits = [...$('emojiGrid').querySelectorAll('section:not(#emojiFound) button.e[data-n]')].filter((b) => b.dataset.n.includes(q)).slice(0, 240);
+  found.lastChild.replaceChildren(...hits.map((b) => h('button', { class: 'e', title: b.dataset.n }, b.textContent)));
+  found.firstChild.textContent = hits.length ? 'Results' : 'No emoji found';
+  $('emojiGrid').scrollTop = 0;
+}
+$('emojiSearch').addEventListener('input', filterEmoji);
+document.addEventListener('mousedown', (e) => { if (!$('emojiPop').hidden && !e.target.closest('#emojiPop, #emojiBtn')) toggleEmoji(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('emojiPop').hidden) { toggleEmoji(false); $('input').focus(); } });
+
 $('attachBtn').addEventListener('click', async () => { if (desk) addPaths(await desk.pickFiles()); else $('fileInput').click(); });
 $('folderBtn').hidden = !desk;
 $('folderBtn').addEventListener('click', async () => addPaths(await desk.pickFolder()));
@@ -620,6 +703,46 @@ $('modal').addEventListener('mousedown', (e) => { if (e.target === $('modal')) $
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('modal').hidden = true; $('viewer').hidden = true; } });
 const field = (label, input, hint) => [h('label', null, label), input, ...(hint ? [h('p', { class: 'hint' }, hint)] : [])];
 
+// Profile photo cropper: drag to position, slider (or mouse wheel) to zoom; the circle is what teammates see.
+function cropPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const V = 264, OUT = 256, url = URL.createObjectURL(file);
+    const img = h('img', { alt: '', draggable: false });
+    const view = h('div', { class: 'crop-view' }, img);
+    const zoom = h('input', { type: 'range', min: 100, max: 500, value: 100, step: 1 });
+    let w = 0, hgt = 0, s0 = 1, ox = 0, oy = 0;
+    const scale = () => s0 * zoom.value / 100;
+    const place = () => {
+      const W = w * scale(), H = hgt * scale();
+      ox = Math.min(0, Math.max(V - W, ox)); oy = Math.min(0, Math.max(V - H, oy));
+      Object.assign(img.style, { width: W + 'px', height: H + 'px', transform: `translate(${ox}px, ${oy}px)` });
+    };
+    const rezoom = (before) => { const k = scale() / before; ox = V / 2 - (V / 2 - ox) * k; oy = V / 2 - (V / 2 - oy) * k; place(); };
+    let last = scale();
+    zoom.addEventListener('input', () => { rezoom(last); last = scale(); });
+    view.addEventListener('wheel', (e) => { e.preventDefault(); zoom.value = Math.min(500, Math.max(100, Number(zoom.value) - Math.sign(e.deltaY) * 12)); rezoom(last); last = scale(); }, { passive: false });
+    let drag = null;
+    view.addEventListener('pointerdown', (e) => { drag = { x: e.clientX - ox, y: e.clientY - oy }; view.setPointerCapture(e.pointerId); });
+    view.addEventListener('pointermove', (e) => { if (drag) { ox = e.clientX - drag.x; oy = e.clientY - drag.y; place(); } });
+    view.addEventListener('pointerup', () => { drag = null; });
+    const done = (v) => { layer.remove(); URL.revokeObjectURL(url); resolve(v); };
+    const layer = h('div', { id: 'crop' }, h('div', { class: 'crop-card' },
+      h('h2', null, 'Adjust your photo'), view,
+      h('p', { class: 'hint' }, 'Drag the picture to move it. Use the slider to zoom.'),
+      h('div', { class: 'range-row' }, h('span', null, '−'), zoom, h('span', null, '+')),
+      h('div', { class: 'actions' }, h('button', { class: 'ghost', type: 'button', onclick: () => done(null) }, 'Cancel'),
+        h('button', { class: 'primary', type: 'button', onclick: () => {
+          const cv = h('canvas', { width: OUT, height: OUT }), k = scale();
+          cv.getContext('2d').drawImage(img, -ox / k, -oy / k, V / k, V / k, 0, 0, OUT, OUT);
+          cv.toBlob((b) => done(b), 'image/jpeg', 0.88);
+        } }, 'Use this photo'))));
+    img.onload = () => { w = img.naturalWidth; hgt = img.naturalHeight; s0 = V / Math.min(w, hgt); ox = (V - w * s0) / 2; oy = (V - hgt * s0) / 2; last = scale(); place(); };
+    img.onerror = () => { layer.remove(); reject(new Error('Could not open that picture')); };
+    img.src = url;
+    document.body.append(layer);
+  });
+}
+
 $('meBtn').addEventListener('click', () => {
   const name = h('input', { type: 'text', value: S.me.name, maxLength: 40 });
   // Department: pick one the team already uses (keeps the member list tidy), or type a new one.
@@ -639,9 +762,8 @@ $('meBtn').addEventListener('click', () => {
     const file = photo.files[0]; photo.value = '';
     if (!file) return;
     try {
-      const bmp = await createImageBitmap(file), side = Math.min(bmp.width, bmp.height), cv = h('canvas', { width: 192, height: 192 });
-      cv.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 192, 192);
-      const blob = await new Promise((res) => cv.toBlob(res, 'image/jpeg', 0.86));
+      const blob = await cropPhoto(file);
+      if (!blob) return;
       const r = await fetch(`/avatar?token=${TOKEN}`, { method: 'POST', body: blob });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Could not use that picture');
       S.me = (await rpc('getState')).me; renderMe(); preview.replaceChildren(avatar(S.me.id, S.me.name));

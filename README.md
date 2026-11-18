@@ -24,6 +24,7 @@ directly. People working from home can join through a small optional relay.
 | Screenshots | Paste with Ctrl+V / Cmd+V or drag and drop; images show inline |
 | Message popup | A new message pops up in the corner of the screen, on top of other programs, until clicked or dismissed |
 | Profile photo | Each member can set a picture; teammates see it in lists and chats |
+| Emoji | Picker with categories, search and recently used |
 | Appearance | Light/dark theme, accent colour, font, text size, zoom and chat wallpaper, per user |
 | Search | Full history is stored locally (SQLite) and searchable |
 | Encryption | End to end for every message and file, on LAN and through the relay |

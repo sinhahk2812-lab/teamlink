@@ -796,6 +796,8 @@ class Messenger extends EventEmitter {
       wall: ['gradient', 'dots', 'image'].includes(a.wall) ? a.wall : 'none',
       dim: num(a.dim, 0, 90, 35),
       wallVer: num(a.wallVer, 0, 1e9, 0),
+      style: a.style === 'solid' ? 'solid' : 'glass',
+      motion: a.motion !== false,
     };
   }
 
@@ -806,12 +808,17 @@ class Messenger extends EventEmitter {
     this.ev('me', this.meView());
   }
 
+  setRecentEmoji(list) {
+    this.cfg.recentEmoji = (Array.isArray(list) ? list : []).filter((e) => typeof e === 'string' && e.length <= 16).slice(0, 32);
+    this.saveCfg();
+  }
+
   wallpaperPath() { return path.join(this.dataDir, 'wallpaper.img'); }
 
   meView() {
     const c = this.cfg;
     return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(), hasLock: !!c.lock, avatar: c.avatar || '',
-      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false, appearance: this.appearance() } };
+      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false, appearance: this.appearance(), recentEmoji: c.recentEmoji || [] } };
   }
 
   getState() {
