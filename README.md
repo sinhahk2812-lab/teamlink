@@ -83,18 +83,45 @@ To ship an update: raise `version` in `package.json`, push to `main`, and wait f
 
 ## Remote teammates (relay)
 
-Run the relay on any machine reachable from the internet (a small VPS is plenty):
+People outside the office network (working from home, another branch) need a relay: a tiny program on the
+internet that passes encrypted messages between team members. It cannot read messages or files and stores nothing.
+There is no way around having *something* reachable on the internet; these are the options, easiest first.
+
+### Option 1: free hosted relay, no server to manage
+
+1. Create a free account on [render.com](https://render.com) and connect your GitHub account.
+2. Open <https://render.com/deploy?repo=https://github.com/sinhahk2812-lab/teamlink> and click **Apply**.
+   This uses `render.yaml` from this repository.
+3. When the service is live, copy its address (like `teamlink-relay-xxxx.onrender.com`) and, under
+   **Environment**, the generated `RELAY_TOKEN`.
+4. In TeamLink Settings on every computer: Relay address `wss://teamlink-relay-xxxx.onrender.com`, Relay token = that value.
+
+Free services on Render go to sleep when unused and take up to a minute to wake, so the first connection of the
+day can be slow. A paid instance (a few dollars a month) stays awake.
+
+### Option 2: your own server
 
 ```bash
-PORT=8080 RELAY_TOKEN=choose-a-secret node relay/server.js
+cd relay
 ```
 
-Put it behind HTTPS (Caddy, nginx or a PaaS) and enter the `wss://...` address and the token in
-Settings on every computer. `relay/Dockerfile` is included.
+```bash
+npm install
+```
 
-The relay only forwards encrypted blobs between members of the same team and stores nothing.
-It cannot read messages or files. Both people must be online at the same time for delivery; until
-then messages wait on the sender's computer (up to 7 days).
+```bash
+PORT=8080 RELAY_TOKEN=choose-a-secret node server.js
+```
+
+Put it behind HTTPS (Caddy, nginx or a PaaS) and use the `wss://...` address in Settings. `relay/Dockerfile` is included.
+
+### Option 3: no relay, use a VPN
+
+Install a mesh VPN such as Tailscale or ZeroTier on every computer. TeamLink then works exactly as on the office
+network; put each remote computer's VPN IP under Settings, "Extra addresses to search".
+
+In all cases both people must be online at the same time for delivery; until then messages wait on the sender's
+computer (up to 7 days).
 
 ## Network details
 

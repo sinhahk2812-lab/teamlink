@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # relay and documentation changes do not need new installers
+    paths-ignore: ['relay/**', 'render.yaml', '**.md', '.github/**']
 permissions:
   contents: write
 jobs:
