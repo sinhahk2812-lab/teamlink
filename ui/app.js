@@ -124,9 +124,27 @@ function renderAll() { renderMe(); renderNet(); renderSide(); updateTitle(); }
 
 // ---------------------------------------------------------------- appearance (theme, colour, font, size, wallpaper)
 const DEFAULT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+// Ready-made themes. "classic" keeps the built-in light/dark colours; the others bring their own.
+const PRESETS = {
+  classic:  { name: 'Classic',  mode: 'system', accent: '#0d9488', pv: ['#1f2937', '#f4f5f7', '#ffffff'] },
+  midnight: { name: 'Midnight', mode: 'dark',  accent: '#38bdf8', bg: '#0b1020', panel: '#131a2e', side: '#070b18', side2: '#141c33', sideText: '#e2e8f0', sideDim: '#8c9ab5', text: '#e6ecf7', dim: '#93a0b8', line: '#222c47', theirs: '#18213a', blobs: ['#6366f1', '#0ea5e9', '#a855f7'] },
+  ocean:    { name: 'Ocean',    mode: 'dark',  accent: '#22d3ee', bg: '#06202b', panel: '#0b2d3b', side: '#041820', side2: '#0d3443', sideText: '#e0f2f7', sideDim: '#86aab6', text: '#e3f4f8', dim: '#8fb2bd', line: '#164352', theirs: '#0f3442', blobs: ['#0ea5e9', '#14b8a6', '#3b82f6'] },
+  sunset:   { name: 'Sunset',   mode: 'dark',  accent: '#fb923c', bg: '#1d1024', panel: '#2a1733', side: '#160b1c', side2: '#33193c', sideText: '#f6e8f2', sideDim: '#b596b3', text: '#f7ebf3', dim: '#bb9db8', line: '#44264d', theirs: '#321c3c', blobs: ['#ec4899', '#f59e0b', '#8b5cf6'] },
+  forest:   { name: 'Forest',   mode: 'dark',  accent: '#4ade80', bg: '#0c1a13', panel: '#13261b', side: '#08130d', side2: '#173021', sideText: '#e3f3e8', sideDim: '#8db09a', text: '#e5f4ea', dim: '#93b3a0', line: '#213b2b', theirs: '#172d20', blobs: ['#16a34a', '#84cc16', '#0d9488'] },
+  amoled:   { name: 'Black',    mode: 'dark',  accent: '#a3e635', bg: '#000000', panel: '#0c0c0c', side: '#000000', side2: '#161616', sideText: '#f2f2f2', sideDim: '#8f8f8f', text: '#f2f2f2', dim: '#9a9a9a', line: '#242424', theirs: '#151515', blobs: ['#3f3f46', '#27272a', '#52525b'] },
+  rose:     { name: 'Rose',     mode: 'light', accent: '#e11d74', bg: '#fdf2f6', panel: '#ffffff', side: '#fbe4ed', side2: '#f6d2e0', sideText: '#4a1830', sideDim: '#946a7c', text: '#3b1226', dim: '#8a6274', line: '#f1d5e0', theirs: '#ffffff', blobs: ['#fb7185', '#f0abfc', '#fda4af'] },
+  lavender: { name: 'Lavender', mode: 'light', accent: '#7c3aed', bg: '#f5f2fe', panel: '#ffffff', side: '#e9e3fb', side2: '#dbd1f6', sideText: '#2e1f56', sideDim: '#7a6c9c', text: '#251848', dim: '#74679a', line: '#e0d8f5', theirs: '#ffffff', blobs: ['#a78bfa', '#60a5fa', '#f0abfc'] },
+  sand:     { name: 'Sand',     mode: 'light', accent: '#c2410c', bg: '#faf5ec', panel: '#fffdf8', side: '#f1e6d2', side2: '#e7d8bd', sideText: '#3f2f17', sideDim: '#8b7858', text: '#33260f', dim: '#857254', line: '#eadfc9', theirs: '#fffdf8', blobs: ['#f59e0b', '#fb923c', '#fde68a'] },
+};
+const PRESET_VARS = { bg: '--bg', panel: '--panel', side: '--side', side2: '--side-2', sideText: '--side-text', sideDim: '--side-dim', text: '--text', dim: '--dim', line: '--line', theirs: '--theirs' };
+
 function applyAppearance(a) {
   const root = document.documentElement;
-  if (a.mode === 'system') delete root.dataset.theme; else root.dataset.theme = a.mode;
+  const preset = PRESETS[a.preset] && a.preset !== 'classic' ? PRESETS[a.preset] : null;
+  const mode = preset ? preset.mode : a.mode;
+  if (mode === 'system') delete root.dataset.theme; else root.dataset.theme = mode;
+  for (const [key, cssVar] of Object.entries(PRESET_VARS)) { if (preset) root.style.setProperty(cssVar, preset[key]); else root.style.removeProperty(cssVar); }
+  ['--b2', '--b3', '--b4'].forEach((v, i) => { if (preset) root.style.setProperty(v, preset.blobs[i]); else root.style.removeProperty(v); });
   root.style.setProperty('--accent', a.accent);
   root.style.setProperty('--font', a.font ? `"${a.font}", ${DEFAULT_FONT}` : DEFAULT_FONT);
   root.style.setProperty('--msg-size', a.msgSize + 'px');
@@ -146,6 +164,14 @@ function appearanceDialog() {
   const mode = h('select', { onchange: () => save({ mode: mode.value }) }, h('option', { value: 'system' }, 'Same as the computer'), h('option', { value: 'light' }, 'Light'), h('option', { value: 'dark' }, 'Dark'));
   const look = h('select', { onchange: () => save({ style: look.value }) }, h('option', { value: 'glass' }, 'Glass (see-through panels, moving colours)'), h('option', { value: 'solid' }, 'Solid (plain, lightest on old PCs)'));
   const motion = h('input', { type: 'checkbox', onchange: () => save({ motion: motion.checked }) });
+  const themes = h('div', { class: 'themes' });
+  const themeCard = (id, t) => {
+    const [side, bg, bubble] = t.pv || [t.side, t.bg, t.theirs];
+    const part = (tag, color) => { const e = h(tag); e.style.background = color; return e; };
+    const body = part('b', bg); body.append(part('u', bubble), part('s', t.accent));
+    return h('button', { class: 'theme' + (a.preset === id ? ' on' : ''), type: 'button', onclick: () => save(id === 'classic' ? { preset: id, accent: t.accent } : { preset: id, accent: t.accent, mode: t.mode }) },
+      h('div', { class: 'pv' }, part('i', side), body), h('span', null, t.name));
+  };
   const swatches = h('div', { class: 'swatches' });
   const custom = h('input', { type: 'color', title: 'Any colour', onchange: () => save({ accent: custom.value }) });
   const font = h('select', { onchange: () => { if (font.value === '?') { other.hidden = false; other.focus(); } else { other.hidden = true; save({ font: font.value }); } } },
@@ -168,13 +194,16 @@ function appearanceDialog() {
   } });
   function draw() {
     mode.value = a.mode; wall.value = a.wall; custom.value = a.accent; look.value = a.style; motion.checked = a.motion;
+    mode.disabled = a.preset !== 'classic';
+    themes.replaceChildren(...Object.entries(PRESETS).map(([id, t]) => themeCard(id, t)));
     if (FONTS.includes(a.font)) { font.value = a.font; other.hidden = true; } else { font.value = '?'; other.hidden = false; other.value = a.font; }
     swatches.replaceChildren(...ACCENTS.map((c) => { const b = h('button', { class: 'swatch' + (c === a.accent ? ' on' : ''), type: 'button', title: c, onclick: () => save({ accent: c }) }); b.style.background = c; return b; }), custom);
   }
   draw();
   modal('Appearance', [
     h('p', { class: 'hint' }, 'Changes apply straight away and only on this computer.'),
-    ...field('Theme', mode),
+    h('label', null, 'Theme'), themes,
+    ...field('Light or dark (Classic theme only)', mode),
     ...field('Style', look),
     h('label', null, motion, ' Animations'),
     h('label', null, 'Colour'), swatches,

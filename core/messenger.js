@@ -797,6 +797,7 @@ class Messenger extends EventEmitter {
       dim: num(a.dim, 0, 90, 35),
       wallVer: num(a.wallVer, 0, 1e9, 0),
       style: a.style === 'solid' ? 'solid' : 'glass',
+      preset: ['midnight', 'ocean', 'sunset', 'forest', 'amoled', 'rose', 'lavender', 'sand'].includes(a.preset) ? a.preset : 'classic',
       motion: a.motion !== false,
     };
   }
