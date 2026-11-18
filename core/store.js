@@ -29,6 +29,7 @@ class Store {
     try { this.db.exec('ALTER TABLE messages ADD COLUMN read_by TEXT'); } catch {}
     // added in 1.1.0: quoted replies and locked messages
     try { this.db.exec('ALTER TABLE messages ADD COLUMN quote TEXT'); } catch {}
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN fwd INTEGER DEFAULT 0'); } catch {} // 1.2.0: forwarded
     try { this.db.exec('ALTER TABLE messages ADD COLUMN locked INTEGER DEFAULT 0'); } catch {}
     this._stmts = new Map();
   }
@@ -86,7 +87,7 @@ class Store {
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
       m.id, m.conv, m.sender, m.ts, m.body || '', JSON.stringify(m.files || []), m.sealed ? 1 : 0, m.opened ? 1 : 0,
       m.auto ? 1 : 0, m.unread ? 1 : 0, JSON.stringify(m.recipients || []), JSON.stringify(m.delivered || []));
-    if (r.changes && (m.quote || m.locked)) this.run('UPDATE messages SET quote=?, locked=? WHERE id=?', m.quote ? JSON.stringify(m.quote) : null, m.locked ? 1 : 0, m.id);
+    if (r.changes && (m.quote || m.locked || m.fwd)) this.run('UPDATE messages SET quote=?, locked=?, fwd=? WHERE id=?', m.quote ? JSON.stringify(m.quote) : null, m.locked ? 1 : 0, m.fwd ? 1 : 0, m.id);
     return r.changes > 0;
   }
   message(id) { return Store.row(this.get('SELECT * FROM messages WHERE id=?', id)); }

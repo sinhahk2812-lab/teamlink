@@ -299,13 +299,13 @@ class Messenger extends EventEmitter {
     return id;
   }
 
-  async send({ conv: convId, text, sealed, locked, replyTo, paths, auto }) {
+  async send({ conv: convId, text, sealed, locked, replyTo, paths, auto, fwd, readyFiles }) {
     if (convId.startsWith('dm:')) { if (!this.peers.has(convId.slice(3))) throw new Error('Unknown member'); this.ensureDm(convId.slice(3)); }
     const conv = this.store.conv(convId);
     if (!conv) throw new Error('Unknown conversation');
     if (conv.left_group) throw new Error('You are no longer in this group');
     const body = String(text || '').slice(0, 20000);
-    const files = [];
+    const files = [...(readyFiles || [])];
     for (const p of paths || []) this.collectFiles(p, files);
     if (!body.trim() && !files.length) throw new Error('Nothing to send');
     if (files.length > 2000) throw new Error('Too many files (max 2000 per message)');
@@ -317,16 +317,36 @@ class Messenger extends EventEmitter {
     let quote = null;
     const q = replyTo ? this.store.message(String(replyTo)) : null;
     if (q && q.conv === convId && !q.sealed) quote = { id: q.id, sender: q.sender, text: q.body.trim().slice(0, 200) || 'Attachment' };
-    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, opened: 1, auto, recipients });
+    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, opened: 1, auto, recipients });
     for (const f of files) this.store.saveFile({ ...f, msg: id, owner: this.me.id, state: 'local' });
     this.store.touchConv(convId, ts);
-    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, locked: isLocked, quote, auto: !!auto,
+    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, auto: !!auto,
       files: files.map(({ fid, name, size, mime }) => ({ fid, name, size, mime })) };
     for (const r of recipients) this.deliver(r, frame);
     const view = this.msgView(this.store.message(id));
     this.ev('message', view);
     this.ev('conv', this.convView(this.store.conv(convId)));
     return view;
+  }
+
+  // Forward an existing message (text and attachments) to other conversations.
+  async forward({ id, convs }) {
+    const m = this.store.message(String(id));
+    if (!m) throw new Error('Unknown message');
+    if (m.sealed) throw new Error('Sealed and locked messages cannot be forwarded');
+    const targets = [...new Set((convs || []).map(String))];
+    if (!targets.length) throw new Error('Pick at least one person or group');
+    const source = this.store.filesOf(m.id);
+    const missing = source.filter((f) => !f.path || !['local', 'done'].includes(f.state) || !fs.existsSync(f.path));
+    if (missing.length) throw new Error(`Download ${missing.length === 1 ? '"' + missing[0].name.split('/').pop() + '"' : 'the ' + missing.length + ' files'} first, then forward`);
+    let sent = 0;
+    for (const conv of targets) {
+      // every copy gets its own file ids, so each recipient can only fetch what was sent to them
+      const readyFiles = source.map((f) => ({ fid: C.rid(), name: f.name, size: fs.statSync(f.path).size, mime: f.mime || '', path: f.path }));
+      await this.send({ conv, text: m.body, fwd: true, readyFiles });
+      sent++;
+    }
+    return sent;
   }
 
   collectFiles(p, out, rel) {
@@ -358,7 +378,7 @@ class Messenger extends EventEmitter {
       quote = { id: String(f.quote.id || '').slice(0, 64), sender: f.quote.sender, text: String(f.quote.text || '').slice(0, 200) };
     }
     const fresh = this.store.addMessage({ id: f.id, conv: convId, sender: from, ts, body: String(f.body || '').slice(0, 20000), sealed,
-      locked: sealed && !!f.locked, quote, auto: !!f.auto, unread: 1 });
+      locked: sealed && !!f.locked, quote, fwd: !!f.fwd, auto: !!f.auto, unread: 1 });
     this.ack(from, f.id);
     if (!fresh) return;
     for (const x of files) {
@@ -457,7 +477,7 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, locked: !!m.locked, quote: hidden ? null : m.quote, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, quote: hidden ? null : m.quote, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {

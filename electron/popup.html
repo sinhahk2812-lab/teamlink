@@ -6,19 +6,24 @@
 <title>TeamLink message</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; }
-  body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: #1f2937; color: #f3f4f6; cursor: pointer; user-select: none;
-    border: 1px solid #0d9488; border-left: 5px solid #0d9488; box-sizing: border-box; display: flex; gap: 12px; padding: 12px 14px; }
-  img { width: 40px; height: 40px; flex: none; }
+  body { font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: linear-gradient(135deg, #1f2937, #111827); color: #f3f4f6; cursor: pointer; user-select: none;
+    border: 1px solid #14b8a6; border-top: 5px solid #14b8a6; box-sizing: border-box; display: flex; align-items: center; gap: 16px; padding: 14px 20px; }
+  img { width: 60px; height: 60px; flex: none; }
   .text { flex: 1; min-width: 0; }
-  #title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 24px; }
-  #body { color: #d1d5db; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; margin-top: 2px; }
-  #more { color: #5eead4; font-size: 12px; margin-top: 4px; }
-  #close { position: absolute; top: 6px; right: 8px; width: 26px; height: 26px; border: 0; border-radius: 6px; background: none; color: #9ca3af; font-size: 18px; cursor: pointer; }
+  #title { font-weight: 700; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 28px; }
+  #body { color: #d1d5db; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; margin-top: 3px; }
+  #more { color: #5eead4; font-size: 13px; margin-top: 6px; }
+  #close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: #9ca3af; font-size: 20px; cursor: pointer; }
   #close:hover { background: #374151; color: #fff; }
+  @keyframes pulse { 0% { transform: scale(1); } 35% { transform: scale(1.035); } 100% { transform: scale(1); } }
+  @keyframes ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-8deg); } 80% { transform: rotate(5deg); } }
+  .text.pulse { animation: pulse .35s ease-out; }
+  img.ring { animation: ring .7s ease-in-out .25s; }
+  @media (prefers-reduced-motion: reduce) { .text.pulse, img.ring { animation: none; } }
 </style>
 </head>
 <body>
-  <img src="icon.png" alt="">
+  <img id="icon" src="icon.png" alt="">
   <div class="text"><div id="title"></div><div id="body"></div><div id="more"></div></div>
   <button id="close" title="Dismiss">×</button>
   <script src="popup.js"></script>

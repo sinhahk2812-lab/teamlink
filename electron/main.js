@@ -69,7 +69,7 @@ async function start() {
       { type: 'separator' },
       { label: 'Exit TeamLink completely…', click: confirmExit },
     ]));
-    tray.on('click', openSend); // like IP Messenger: clicking the tray icon opens the send window
+    tray.on('click', showWindow);
   } catch {}
 
   messenger.on('event', (name, d) => { if (name === 'incoming') onIncoming(d); else if (name === 'opened') onOpened(d); });
@@ -78,9 +78,10 @@ async function start() {
   setupUpdates();
 
   // Installed app: start with the computer by default, once. It can be switched off in Settings.
-  const marker = path.join(app.getPath('userData'), 'autostart-set');
+  // ("-2": versions before 1.2.0 could switch it off by mistake when Settings was saved, so it is applied once more.)
+  const marker = path.join(app.getPath('userData'), 'autostart-set-2');
   if (app.isPackaged && !fs.existsSync(marker)) {
-    try { app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] }); fs.writeFileSync(marker, '1'); } catch {}
+    try { setAutostart(true); fs.writeFileSync(marker, '1'); } catch {}
   }
   app.on('activate', showWindow);
 }
@@ -88,7 +89,8 @@ async function start() {
 // ------------------------------------------------------------------ message popup
 // Like IP Messenger: a new message pops up in the corner of the screen, on top of other programs,
 // and stays there until it is clicked (opens the chat) or dismissed.
-const POPUP_W = 380, POPUP_H = 120;
+const POPUP_W = 520, POPUP_H = 156;
+let popupAnim = null;
 let popup = null, popupReady = false, popupData = null, popupCount = 0;
 
 function onIncoming(d) {
@@ -126,13 +128,29 @@ function showPopup() {
     popup.loadFile(path.join(__dirname, 'popup.html'));
   }
   const area = screen.getPrimaryDisplay().workArea;
-  popup.setBounds({ x: area.x + area.width - POPUP_W - 16, y: area.y + area.height - POPUP_H - 16, width: POPUP_W, height: POPUP_H });
+  // Top centre of the screen. A popup that is not showing yet drops in from above the screen edge;
+  // one that is already showing just refreshes its text (the page plays a short pulse).
+  const x = Math.round(area.x + (area.width - POPUP_W) / 2), restY = area.y + 28;
   if (popupReady) popup.webContents.send('popupData', popupData);
+  if (popup.isVisible() && !popupAnim) return popup.setBounds({ x, y: restY, width: POPUP_W, height: POPUP_H });
+  clearInterval(popupAnim);
+  const fromY = area.y - POPUP_H, started = Date.now(), DURATION = 380;
+  popup.setBounds({ x, y: fromY, width: POPUP_W, height: POPUP_H });
+  try { popup.setOpacity(0); } catch {}
   popup.showInactive(); // never steals the keyboard from what the user is typing in
+  popupAnim = setInterval(() => {
+    if (!popup || popup.isDestroyed()) { clearInterval(popupAnim); popupAnim = null; return; }
+    const t = Math.min(1, (Date.now() - started) / DURATION);
+    const c1 = 1.70158, c3 = c1 + 1, ease = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); // ease-out with a small overshoot
+    popup.setBounds({ x, y: Math.round(fromY + (restY - fromY) * ease), width: POPUP_W, height: POPUP_H });
+    try { popup.setOpacity(Math.min(1, t * 1.6)); } catch {}
+    if (t >= 1) { clearInterval(popupAnim); popupAnim = null; }
+  }, 12);
 }
 
 function hidePopup() {
   popupCount = 0;
+  clearInterval(popupAnim); popupAnim = null;
   if (popup && !popup.isDestroyed()) popup.hide();
 }
 
@@ -193,8 +211,13 @@ ipcMain.handle('setUnread', (e, n) => {
   if (tray) tray.setToolTip(n ? `TeamLink (${n} unread)` : 'TeamLink');
 });
 ipcMain.handle('focus', (e) => { if (fromUi(e)) showWindow(); });
-ipcMain.handle('getAutostart', () => app.getLoginItemSettings().openAtLogin);
-ipcMain.handle('setAutostart', (e, on) => { if (fromUi(e)) app.setLoginItemSettings({ openAtLogin: !!on, args: ['--hidden'] }); });
+// Start with the computer. Windows only reports the entry when it is asked with the same path and
+// arguments it was written with, so reading and writing must use identical options.
+const LOGIN = { path: process.execPath, args: ['--hidden'] };
+function getAutostart() { return !!app.getLoginItemSettings(LOGIN).openAtLogin; }
+function setAutostart(on) { app.setLoginItemSettings({ ...LOGIN, openAtLogin: !!on }); }
+ipcMain.handle('getAutostart', () => getAutostart());
+ipcMain.handle('setAutostart', (e, on) => { if (fromUi(e) && !!on !== getAutostart()) setAutostart(on); });
 
 // TeamLink is meant to stay reachable all day. Closing the window, Quit in the menu, Alt+F4 or Cmd+Q
 // only hide it; it keeps running in the tray. The only way to stop it is the tray's "Exit completely".

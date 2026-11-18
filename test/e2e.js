@@ -155,6 +155,16 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   assert.equal(fs.readFileSync(path.join(chosen, 'project (2)', 'a.txt'), 'utf8'), 'A');
   ok('download all: a folder lands in the chosen place with its structure, without overwriting');
 
+  // forwarding: text + attachment go to another person and a group; sealed messages cannot be forwarded
+  const src = msgs(B, 'dm:' + A.me.id).find((m) => m.id === im.id);
+  assert.equal(await B.forward({ id: src.id, convs: ['dm:' + C.me.id] }), 1);
+  const fw = await until('forwarded arrives', () => msgs(C, 'dm:' + B.me.id).find((m) => m.fwd));
+  assert.equal(fw.files.length, 1);
+  const fwFile = await until('forwarded image', () => { const f = C.store.file(fw.files[0].fid); return f.state === 'done' && f; });
+  assert.equal(sha(fwFile.path), sha(png));
+  await assert.rejects(B.forward({ id: s1.id, convs: ['dm:' + C.me.id] }), /cannot be forwarded/);
+  ok('forward a message with its attachment; sealed messages are refused');
+
   // absence auto reply
   B.setProfile({ status: 'away', absenceMsg: 'In a meeting till 4' });
   await A.send({ conv: 'dm:' + B.me.id, text: 'ping' }); await A.send({ conv: 'dm:' + B.me.id, text: 'ping again' });

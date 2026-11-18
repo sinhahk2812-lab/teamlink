@@ -16,6 +16,7 @@ directly. People working from home can join through a small optional relay.
 | Group chats | Any member can rename the group, add or remove people, or leave |
 | Everyone channel | Broadcast to the whole team (IP Messenger's "broadcast") |
 | Locked messages | Like sealed, and the receiver must also type their own lock password |
+| Forward | Forward a message and its attachments to other people or groups |
 | Reply with quote | Reply to a specific message; the original is quoted |
 | Sealed messages | Receiver must click to open; sender sees when it was opened |
 | Absence mode | Away status with an automatic reply (once per person) |

@@ -337,6 +337,7 @@ function msgNode(m, c, showWho) {
     if (m.sealed) bubble.append(h('span', { class: 'tag' }, m.locked ? '🔑 Locked' : '🔒 Sealed'));
     if (m.quote) bubble.append(h('span', { class: 'quote', onclick: () => jumpTo(m.quote.id) }, h('b', null, memberName(c, m.quote.sender)), h('span', null, m.quote.text)));
     if (m.auto) bubble.append(h('span', { class: 'tag' }, 'Automatic reply'));
+    if (m.fwd) bubble.append(h('span', { class: 'tag' }, '↪ Forwarded'));
     if (m.body) bubble.append(...linkify(m.body));
     for (const f of m.files) bubble.append(fileNode(m, f));
     const waiting = m.mine ? 0 : m.files.filter((f) => f.state === 'remote' && !(S.progress.get(f.fid) || {}).state).length;
@@ -350,7 +351,32 @@ function msgNode(m, c, showWho) {
   }
   return h('div', { class: 'msg' + (m.mine ? ' mine' : ''), 'data-id': m.id },
     showWho && h('div', { class: 'who' }, memberName(c, m.sender)), bubble,
-    h('div', { class: 'meta' }, meta, !m.hidden && !m.sealed && !c.left && h('button', { class: 'reply', title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩ Reply')));
+    h('div', { class: 'meta' }, meta, !m.hidden && !m.sealed && !c.left && h('button', { class: 'reply', title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩ Reply'),
+      !m.hidden && !m.sealed && h('button', { class: 'reply', title: 'Forward this message to other people', onclick: () => forwardDialog(m) }, '↪ Forward')));
+}
+
+// Forward a message (text and attachments) to people and groups.
+function forwardDialog(m) {
+  const people = [...S.peers.values()].sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
+  const groups = [...S.convs.values()].filter((c) => c.type === 'group' && !c.left);
+  const row = (conv, seed, label, dot) => h('label', null, h('input', { type: 'checkbox', value: conv }), avatar(seed, label, dot), h('span', null, label));
+  const boxes = [
+    ...people.map((p) => row('dm:' + p.id, p.id, p.name + (p.dept ? ' · ' + p.dept : '') + (p.online ? '' : ' (offline)'), dotOf(p))),
+    ...groups.map((g) => row(g.id, g.id, convName(g) + ' (group)')),
+  ];
+  const picked = () => boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+  const what = m.body.trim() ? m.body.trim().slice(0, 140) : '';
+  const fileNote = m.files.length ? (m.files.length === 1 ? m.files[0].name.split('/').pop() : m.files.length + ' files') : '';
+  modal('Forward message', [
+    h('div', { class: 'quote' }, h('b', null, 'Message'), h('span', null, [what, fileNote && '📎 ' + fileNote].filter(Boolean).join(' · '))),
+    h('label', null, 'Forward to'),
+    boxes.length ? h('div', { class: 'pick' }, boxes) : h('p', { class: 'hint' }, 'No teammates found yet.'),
+  ], { label: 'Forward', run: async () => {
+    const convs = picked();
+    if (!convs.length) { toast('Pick at least one person or group'); throw new Error('none'); }
+    const n = await call('forward', { id: m.id, convs });
+    toast(`Forwarded to ${n} ${n === 1 ? 'chat' : 'chats'}`);
+  } });
 }
 
 function jumpTo(id) {
@@ -547,7 +573,8 @@ function openSettings() {
   const autostart = desk ? h('input', { type: 'checkbox' }) : null;
   const popup = desk ? h('input', { type: 'checkbox', checked: c.popup !== false }) : null;
   const askSave = desk ? h('input', { type: 'checkbox', checked: c.askSave !== false }) : null;
-  if (desk) desk.getAutostart().then((v) => { autostart.checked = v; });
+  let autostartWas = null; // stays null until the real value is known, so saving never changes it by accident
+  if (desk) desk.getAutostart().then((v) => { autostart.checked = v; autostartWas = v; });
   modal('Settings', [
     h('h3', null, 'Team'),
     ...field('Team code', team, 'Everyone in the team must enter exactly the same code. Without the right code a computer cannot see the team, join it or read anything. Keep it secret and never post it publicly.'),
@@ -565,7 +592,7 @@ function openSettings() {
     desk && updateRow(),
   ], { label: 'Save', run: async () => {
     await call('setConfig', { teamCode: team.value, relayUrl: relay.value, relayToken: token.value, extraPeers: extra.value, downloadDir: dl.value, popup: popup ? popup.checked : undefined, askSave: askSave ? askSave.checked : undefined });
-    if (desk) desk.setAutostart(autostart.checked);
+    if (desk && autostartWas !== null && autostart.checked !== autostartWas) desk.setAutostart(autostart.checked);
   } });
 }
 $('settingsBtn').addEventListener('click', openSettings);
