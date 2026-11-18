@@ -142,6 +142,7 @@ function applyAppearance(a) {
   const root = document.documentElement;
   const preset = PRESETS[a.preset] && a.preset !== 'classic' ? PRESETS[a.preset] : null;
   const mode = preset ? preset.mode : a.mode;
+  root.dataset.preset = preset ? a.preset : 'classic';
   if (mode === 'system') delete root.dataset.theme; else root.dataset.theme = mode;
   for (const [key, cssVar] of Object.entries(PRESET_VARS)) { if (preset) root.style.setProperty(cssVar, preset[key]); else root.style.removeProperty(cssVar); }
   ['--b2', '--b3', '--b4'].forEach((v, i) => { if (preset) root.style.setProperty(v, preset.blobs[i]); else root.style.removeProperty(v); });

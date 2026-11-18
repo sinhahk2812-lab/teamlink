@@ -1,6 +1,6 @@
 'use strict';
 // Desktop shell: starts the engine in this process and shows its UI in a window, with a tray icon.
-const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen, nativeTheme } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { Messenger } = require('../core/messenger');
@@ -89,7 +89,7 @@ async function start() {
 // ------------------------------------------------------------------ message popup
 // Like IP Messenger: a new message pops up in the corner of the screen, on top of other programs,
 // and stays there until it is clicked (opens the chat) or dismissed.
-const POPUP_W = 520, POPUP_H = 156;
+const POPUP_W = 580, POPUP_H = 196; // includes a transparent margin for the card's glow and shadow
 let popupAnim = null;
 let popup = null, popupReady = false, popupData = null, popupCount = 0;
 
@@ -125,10 +125,19 @@ function onOpened(d) {
   showPopup();
 }
 
+// The popup follows the user's theme: accent colour and light or dark glass.
+function popupLook() {
+  const a = messenger.appearance();
+  const light = ['rose', 'lavender', 'sand'].includes(a.preset) || (a.preset === 'classic' && (a.mode === 'light' || (a.mode === 'system' && !nativeTheme.shouldUseDarkColors)));
+  return { accent: a.accent, light, motion: a.motion };
+}
+
 function showPopup() {
+  Object.assign(popupData, popupLook());
   if (!popup || popup.isDestroyed()) {
     popupReady = false;
-    popup = new BrowserWindow({ width: POPUP_W, height: POPUP_H, frame: false, resizable: false, minimizable: false, maximizable: false,
+    popup = new BrowserWindow({ width: POPUP_W, height: POPUP_H, frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
+      resizable: false, minimizable: false, maximizable: false,
       fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, show: false, title: 'TeamLink message', icon: ICON,
       webPreferences: { preload: path.join(__dirname, 'popup-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     popup.setAlwaysOnTop(true, 'pop-up-menu');
@@ -139,7 +148,7 @@ function showPopup() {
   const area = screen.getPrimaryDisplay().workArea;
   // Top centre of the screen. A popup that is not showing yet drops in from above the screen edge;
   // one that is already showing just refreshes its text (the page plays a short pulse).
-  const x = Math.round(area.x + (area.width - POPUP_W) / 2), restY = area.y + 28;
+  const x = Math.round(area.x + (area.width - POPUP_W) / 2), restY = area.y + 10;
   if (popupReady) popup.webContents.send('popupData', popupData);
   if (popup.isVisible() && !popupAnim) return popup.setBounds({ x, y: restY, width: POPUP_W, height: POPUP_H });
   clearInterval(popupAnim);
