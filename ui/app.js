@@ -210,6 +210,7 @@ async function openConv(id, focusMsg) {
   if (id.startsWith('dm:') && !S.convs.has(id)) S.convs.set(id, { id, type: 'dm', members: [], unread: 0, last: null });
   const changed = S.active !== id;
   S.active = id;
+  if (desk && desk.setActiveConv) desk.setActiveConv(id);
   if (changed) { S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); }
   document.body.classList.add('in-chat');
   $('empty').hidden = true; $('chat').hidden = false;
@@ -226,6 +227,7 @@ async function openConv(id, focusMsg) {
 }
 function closeChat() {
   S.active = null; S.msgs = [];
+  if (desk && desk.setActiveConv) desk.setActiveConv(null);
   document.body.classList.remove('in-chat');
   $('chat').hidden = true; $('empty').hidden = false;
   renderSide();

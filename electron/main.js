@@ -93,8 +93,17 @@ const POPUP_W = 520, POPUP_H = 156;
 let popupAnim = null;
 let popup = null, popupReady = false, popupData = null, popupCount = 0;
 
+// The popup is skipped only when the user is really looking at that very conversation: TeamLink is the
+// active window, not minimised, and that chat is the one open. Being in another chat (or having the
+// window merely open behind other programs) still gets the popup, like IP Messenger.
+let activeConv = null;
+function lookingAt(conv) {
+  return win.isVisible() && !win.isMinimized() && win.isFocused() && activeConv === conv;
+}
+ipcMain.on('activeConv', (e, conv) => { if (win && e.sender === win.webContents) activeConv = conv ? String(conv) : null; });
+
 function onIncoming(d) {
-  if (win.isVisible() && win.isFocused()) return; // already looking at TeamLink
+  if (lookingAt(d.conv)) return; // that chat is open in front of the user right now
   win.flashFrame(true);
   if (messenger.cfg.popup === false) return;
   const conv = messenger.convView(messenger.store.conv(d.conv));
@@ -109,7 +118,7 @@ function onIncoming(d) {
 
 // The other person opened a sealed message you sent: tell the sender, like IP Messenger's "opened" notice.
 function onOpened(d) {
-  if ((win.isVisible() && win.isFocused()) || messenger.cfg.popup === false) return; // the window shows it itself
+  if (lookingAt(d.conv) || messenger.cfg.popup === false) return; // the window shows it itself
   const peer = messenger.peers.get(d.by);
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   popupData = { conv: d.conv, count: 1, title: `${(peer && peer.name) || 'Someone'} opened your message`, body: d.preview, note: `Opened at ${time} · click to open the chat` };
