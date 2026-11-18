@@ -410,16 +410,22 @@ function msgNode(m, c, showWho) {
     const waiting = m.mine ? 0 : m.files.filter((f) => f.state === 'remote' && !(S.progress.get(f.fid) || {}).state).length;
     if (waiting > 1) bubble.append(h('div', { class: 'file-all' }, h('button', { onclick: () => downloadAll(m) }, `Download all ${waiting} files`)));
   }
-  let meta = fmtTime(m.ts);
-  if (m.mine) {
-    if (m.sealed) meta += m.readAt ? ' · Opened ' + fmtTime(m.readAt) : m.delivered ? ' · Delivered, not opened yet' : ' · Waiting for them to come online';
-    else if (m.recipients <= 1) meta += m.readAt ? ' · ✓✓ Seen ' + fmtTime(m.readAt) : m.delivered ? ' · ✓ Delivered, not seen yet' : m.recipients ? ' · Waiting for them to come online' : '';
-    else meta += ` · Delivered to ${m.delivered} of ${m.recipients}` + (m.seen ? ` · Seen by ${m.seen}` : '');
+  // WhatsApp-style stamp inside the bubble: time, then ticks for my own messages.
+  //   ✓ grey = sent, waiting for them to come online   ✓✓ grey = delivered   ✓✓ blue = seen / opened
+  let ticks = null, detail = fmtDay(m.ts) + ' ' + fmtTime(m.ts);
+  if (m.mine && m.recipients) {
+    const seenAll = m.recipients <= 1 ? !!m.readAt : m.seen >= m.recipients;
+    const deliveredAll = m.delivered >= m.recipients;
+    ticks = h('span', { class: 'ticks' + (seenAll ? ' seen' : '') }, deliveredAll || seenAll ? '✓✓' : '✓');
+    if (m.recipients <= 1) detail = m.readAt ? `${m.sealed ? 'Opened' : 'Seen'} ${fmtTime(m.readAt)}` : m.delivered ? (m.sealed ? 'Delivered, not opened yet' : 'Delivered, not seen yet') : 'Waiting for them to come online';
+    else detail = `Delivered to ${m.delivered} of ${m.recipients}` + (m.seen ? ` · Seen by ${m.seen}` : '');
   }
+  bubble.append(h('span', { class: 'stamp', title: detail, onclick: () => toast(detail) }, fmtTime(m.ts), ticks));
+  const acts = !m.hidden && !m.sealed && h('div', { class: 'acts' },
+    !c.left && h('button', { title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩'),
+    h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'));
   return h('div', { class: 'msg' + (m.mine ? ' mine' : ''), 'data-id': m.id },
-    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), bubble,
-    h('div', { class: 'meta' }, meta, !m.hidden && !m.sealed && !c.left && h('button', { class: 'reply', title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩ Reply'),
-      !m.hidden && !m.sealed && h('button', { class: 'reply', title: 'Forward this message to other people', onclick: () => forwardDialog(m) }, '↪ Forward')));
+    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts));
 }
 
 // Forward a message (text and attachments) to people and groups.
