@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('desktop', {
   pickFiles: () => ipcRenderer.invoke('pickFiles'),
   pickFolder: () => ipcRenderer.invoke('pickFolder'),
+  restart: () => ipcRenderer.invoke('restart'),
   pickSave: (name) => ipcRenderer.invoke('pickSave', name),
   pickSaveFolder: () => ipcRenderer.invoke('pickSaveFolder'),
   openPath: (p) => ipcRenderer.invoke('openPath', p),

@@ -360,3 +360,59 @@ body[data-style="glass"] #dropHint { border-radius: 26px; -webkit-backdrop-filte
 @media (prefers-color-scheme: light) {
   :root[data-preset="classic"]:not([data-theme="dark"]) body[data-style="glass"] #side { background: var(--lg-sheen), color-mix(in srgb, var(--side) 88%, transparent); }
 }
+
+/* ---------- sub-chat tabs ---------- */
+#subBar { display: flex; gap: 6px; padding: 6px 12px; overflow-x: auto; flex: none; scrollbar-width: none; border-bottom: 1px solid var(--line); background: var(--panel); }
+#subBar::-webkit-scrollbar { display: none; }
+.stab { display: inline-flex; align-items: center; gap: 6px; flex: none; border: 1px solid var(--line); background: none; color: var(--dim); border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
+.stab:hover { color: var(--text); border-color: var(--accent); }
+.stab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.stab b { background: var(--accent); color: #fff; border-radius: 999px; font-size: 11px; padding: 0 6px; }
+.stab.on b { background: #fff; color: var(--accent-2); }
+.stab i { font-style: normal; opacity: .8; margin-right: -4px; padding: 0 3px; border-radius: 50%; }
+.stab i:hover { opacity: 1; background: rgba(255,255,255,.25); }
+.stab.add { border-style: dashed; }
+body[data-style="glass"] #subBar { background: none; border: 0; padding: 0 6px; }
+body[data-style="glass"] .stab { border-color: var(--lg-rim); background: var(--lg-sheen), var(--lg-fill); box-shadow: inset 0 1px 0 rgba(255,255,255,.4); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); color: var(--text); }
+body[data-style="glass"] .stab.on { color: #fff; border-color: rgba(255,255,255,.4); background: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0) 55%), linear-gradient(135deg, var(--accent), var(--accent-2)); }
+body[data-motion="on"] .stab { transition: background .15s, color .15s, transform .12s; }
+body[data-motion="on"] .stab:active { transform: scale(.95); }
+body[data-wall="paper"] #messages { background-size: auto, 520px; background-repeat: repeat; }
+
+/* ---------- big emoji-only messages ---------- */
+.bubble.jumbo, body[data-style="glass"] .bubble.jumbo, body[data-style="glass"] .msg.mine .bubble.jumbo { background: none; border-color: transparent; box-shadow: none; padding: 0 4px; font-size: calc(var(--msg-size) * 3.2); line-height: 1.15;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; color: var(--dim); }
+.bubble.jumbo .stamp { font-size: 10.5px; margin-top: 2px; color: var(--dim) !important; }
+
+/* ---------- more motion ---------- */
+@keyframes jelly { 0% { transform: scale(.3) rotate(-12deg); opacity: 0; } 55% { transform: scale(1.18) rotate(5deg); opacity: 1; } 75% { transform: scale(.94) rotate(-2deg); } 100% { transform: none; } }
+@keyframes tickPop { 0% { transform: scale(1); } 40% { transform: scale(1.9) rotate(-8deg); } 100% { transform: scale(1); } }
+@keyframes ringOut { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(2.6); opacity: 0; } }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent); transform: scale(1); } 30% { transform: scale(1.025); } 100% { box-shadow: 0 0 0 14px transparent; transform: scale(1); } }
+@keyframes launch { 0% { transform: none; } 35% { transform: translate(5px, -6px) scale(.9) rotate(-6deg); } 100% { transform: none; } }
+@keyframes glow { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 50% { box-shadow: 0 0 0 7px transparent; } }
+@keyframes floaty { from { transform: translateY(-5px); } to { transform: translateY(5px); } }
+@keyframes slideIn { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+body[data-motion="on"] .msg.fresh .bubble.jumbo { animation: jelly .6s cubic-bezier(.2, .9, .3, 1.2) both; animation-delay: var(--age, 0ms); }
+body[data-motion="on"] .ticks.pop { display: inline-block; animation: tickPop .5s ease-out both; animation-delay: var(--age, 0ms); }
+body[data-motion="on"] .avatar .dot.online::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--online); animation: ringOut 2.6s ease-out infinite; }
+body[data-motion="on"] .item.ping { animation: ping 1.2s ease-out both; animation-delay: var(--age, 0ms); }
+body[data-motion="on"] .item.ping .badge { animation: jelly .6s both; animation-delay: var(--age, 0ms); }
+body[data-motion="on"] #sendBtn.launch { animation: launch .45s cubic-bezier(.3, .8, .3, 1.3); }
+body[data-motion="on"] #sendBtn.ready { animation: glow 1.6s ease-in-out infinite; }
+body[data-motion="on"] .empty-card { animation: floaty 4.5s ease-in-out infinite alternate; }
+body[data-motion="on"].boot #lists .item { animation: slideIn .4s cubic-bezier(.2, .8, .3, 1) both; }
+body[data-motion="on"].boot #chatHead, body[data-motion="on"].boot #composer { animation: fadeUp .45s ease-out both; }
+body[data-motion="on"] .avatar { transition: transform .2s cubic-bezier(.3, .8, .3, 1.4); }
+body[data-motion="on"] .item:hover .avatar { transform: scale(1.08) rotate(-4deg); }
+body[data-motion="on"] .bubble { transition: transform .15s; }
+body[data-motion="on"] .msg:hover .bubble:not(.jumbo) { transform: translateY(-1px); }
+body[data-motion="on"] .stab.on { animation: growIn .2s ease-out; }
+body[data-motion="on"] .theme { transition: transform .15s, border-color .15s; }
+body[data-motion="on"] .theme:hover { transform: translateY(-3px) scale(1.03); }
+body[data-motion="on"] .swatch { transition: transform .15s; }
+body[data-motion="on"] .swatch:hover { transform: scale(1.2); }
+body[data-motion="on"] .bar i { background-image: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+body[data-motion="on"].theming, body[data-motion="on"].theming #side, body[data-motion="on"].theming #chatHead, body[data-motion="on"].theming #composer, body[data-motion="on"].theming .bubble, body[data-motion="on"].theming #modalCard, body[data-motion="on"].theming .item {
+  transition: background .45s ease, color .45s ease, border-color .45s ease, box-shadow .45s ease; }

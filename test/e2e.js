@@ -176,6 +176,20 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await assert.rejects(B.forward({ id: s1.id, convs: ['dm:' + C.me.id] }), /cannot be forwarded/);
   ok('forward a message with its attachment; sealed messages are refused');
 
+  // sub-chats: a named topic inside a conversation, shared by both sides
+  const sub = A.createSub({ conv: 'dm:' + B.me.id, name: 'Invoices' });
+  await until('sub-chat sync', () => B.getState().convs.find((c) => c.id === 'dm:' + A.me.id).subs.some((x) => x.id === sub.id && x.name === 'Invoices'));
+  const before = msgs(B, 'dm:' + A.me.id).length;
+  const sm = await A.send({ conv: 'dm:' + B.me.id, text: 'invoice 42 attached', sub: sub.id });
+  await until('sub message', () => B.getMessages({ conv: 'dm:' + A.me.id, sub: sub.id }).some((m) => m.id === sm.id));
+  assert.equal(B.getMessages({ conv: 'dm:' + A.me.id, sub: '' }).some((m) => m.id === sm.id), false);
+  assert.equal(B.getState().convs.find((c) => c.id === 'dm:' + A.me.id).subs[0].unread, 1);
+  B.markRead('dm:' + A.me.id, sub.id);
+  assert.equal(B.getState().convs.find((c) => c.id === 'dm:' + A.me.id).subs[0].unread, 0);
+  B.deleteSub({ conv: 'dm:' + A.me.id, sub: sub.id });
+  assert.ok(B.getMessages({ conv: 'dm:' + A.me.id, sub: '' }).some((m) => m.id === sm.id) && msgs(B, 'dm:' + A.me.id).length === before + 1);
+  ok('sub-chat: shared topic with its own messages and unread count; deleting it keeps the messages');
+
   // absence auto reply
   B.setProfile({ status: 'away', absenceMsg: 'In a meeting till 4' });
   await A.send({ conv: 'dm:' + B.me.id, text: 'ping' }); await A.send({ conv: 'dm:' + B.me.id, text: 'ping again' });
@@ -195,6 +209,25 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await until('queued delivery', () => msgs(B, 'dm:' + A.me.id).some((m) => m.id === q.id));
   await until('queued ack', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === q.id).delivered === 1);
   ok('message sent while the peer was offline is delivered when it returns');
+
+  // backup with an easy key, then restore into an empty data folder
+  assert.throws(() => A.setBackupKey({ key: 'abc' }), /at least 4/);
+  await assert.rejects(A.createBackup(path.join(tmp, 'x.tlbackup')), /Set a backup key/);
+  A.cfg.autoBackup = false; A.setBackupKey({ key: 'asha2026' });
+  const bfile = await A.createBackup(path.join(tmp, 'asha.tlbackup'));
+  assert.ok(!fs.readFileSync(bfile).includes(Buffer.from('Hello Bilal')) && !fs.readFileSync(bfile).includes(Buffer.from(A.me.priv.slice(0, 24))));
+  const R0 = new Messenger(path.join(tmp, 'Restored'), { name: 'fresh', udpPort: base + 9, teamCode: '' });
+  assert.throws(() => R0.restoreBackup({ path: bfile, key: 'wrong' }), /Wrong backup key/);
+  assert.throws(() => R0.restoreBackup({ path: png, key: 'asha2026' }), /not a TeamLink backup/);
+  assert.equal(R0.restoreBackup({ path: bfile, key: 'asha2026' }).name, 'Asha');
+  R0.store.close();
+  assert.equal(Messenger.applyPendingRestore(path.join(tmp, 'Restored')), true);
+  const R = new Messenger(path.join(tmp, 'Restored'), { udpPort: base + 9, teamCode: '' });
+  assert.equal(R.me.id, A.me.id);
+  assert.ok(R.getMessages({ conv: 'dm:' + B.me.id }).some((m) => m.body === 'Hello Bilal'));
+  assert.equal(R.store.convs().length, A.getState().convs.length);
+  R.store.close();
+  ok('encrypted backup restores identity, settings and history; wrong key is refused');
 
   assert.equal(A.search({ text: 'friday' }).length, 1);
   assert.equal(A.search({ text: 'report.bin' }).length, 1);

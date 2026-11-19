@@ -9,7 +9,7 @@ const WebSocket = require('ws');
 const { safeRelPath } = require('./messenger');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg' };
 const INLINE_IMAGES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp' };
 const MAX_UPLOAD = 4 * 1024 * 1024 * 1024;
 
@@ -134,8 +134,13 @@ function startServer(messenger, { port = 0, token } = {}) {
   const methods = {
     getState: () => messenger.getState(),
     getMessages: (p) => messenger.getMessages(p),
-    send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, locked: p.locked, replyTo: p.replyTo, paths: (p.paths || []).map(String) }),
-    markRead: (p) => messenger.markRead(String(p.conv)),
+    send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, locked: p.locked, replyTo: p.replyTo, sub: p.sub || undefined, paths: (p.paths || []).map(String) }),
+    markRead: (p) => messenger.markRead(String(p.conv), p.sub ? String(p.sub) : undefined),
+    createSub: (p) => messenger.createSub(p),
+    deleteSub: (p) => messenger.deleteSub(p),
+    setBackupKey: (p) => messenger.setBackupKey(p),
+    createBackup: (p) => messenger.createBackup(p.target ? String(p.target) : undefined),
+    restoreBackup: (p) => messenger.restoreBackup(p),
     openSealed: (p) => messenger.openSealed(String(p.id), p.password),
     setLockPassword: (p) => messenger.setLockPassword(p),
     downloadAll: (p) => messenger.downloadAll(String(p.msg), p.dir ? String(p.dir) : undefined),

@@ -37,6 +37,7 @@ async function start() {
   const startHidden = process.argv.includes('--hidden') || fs.existsSync(hiddenOnce);
   fs.rmSync(hiddenOnce, { force: true });
 
+  Messenger.applyPendingRestore(app.getPath('userData')); // a restore chosen before the restart
   messenger = new Messenger(app.getPath('userData'));
   await messenger.start();
   server = await startServer(messenger);
@@ -89,7 +90,7 @@ async function start() {
 // ------------------------------------------------------------------ message popup
 // Like IP Messenger: a new message pops up in the corner of the screen, on top of other programs,
 // and stays there until it is clicked (opens the chat) or dismissed.
-const POPUP_W = 580, POPUP_H = 196; // includes a transparent margin for the card's glow and shadow
+const POPUP_W = 584, POPUP_H = 200; // includes a transparent margin for the card's glow and shadow
 let popupAnim = null;
 let popup = null, popupReady = false, popupData = null, popupCount = 0;
 
@@ -229,6 +230,12 @@ ipcMain.handle('setUnread', (e, n) => {
   if (tray) tray.setToolTip(n ? `TeamLink (${n} unread)` : 'TeamLink');
 });
 ipcMain.handle('focus', (e) => { if (fromUi(e)) showWindow(); });
+// Restart the app (used after a restore, which is applied at start-up).
+ipcMain.handle('restart', (e) => {
+  if (!fromUi(e) || exiting) return;
+  exiting = true;
+  Promise.resolve().then(() => { server && server.close(); return messenger && messenger.stop(); }).catch(() => {}).finally(() => { app.relaunch(); app.exit(0); });
+});
 // Start with the computer. Windows only reports the entry when it is asked with the same path and
 // arguments it was written with, so reading and writing must use identical options.
 const LOGIN = { path: process.execPath, args: ['--hidden'] };

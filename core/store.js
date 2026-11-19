@@ -31,6 +31,9 @@ class Store {
     // added in 1.1.0: quoted replies and locked messages
     try { this.db.exec('ALTER TABLE messages ADD COLUMN quote TEXT'); } catch {}
     try { this.db.exec('ALTER TABLE messages ADD COLUMN fwd INTEGER DEFAULT 0'); } catch {} // 1.2.0: forwarded
+    // 1.6.0: sub-chats (named topics inside a conversation)
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN sub TEXT'); } catch {}
+    this.db.exec('CREATE TABLE IF NOT EXISTS subs(conv TEXT NOT NULL, id TEXT NOT NULL, name TEXT, created INTEGER, PRIMARY KEY(conv, id))');
     try { this.db.exec('ALTER TABLE messages ADD COLUMN locked INTEGER DEFAULT 0'); } catch {}
     this._stmts = new Map();
   }
@@ -72,6 +75,7 @@ class Store {
   }
   touchConv(id, ts) { this.run('UPDATE convs SET updated=? WHERE id=?', ts, id); }
   deleteConv(id) {
+    this.run('DELETE FROM subs WHERE conv=?', id);
     this.run('DELETE FROM files WHERE msg IN (SELECT id FROM messages WHERE conv=?)', id);
     this.run('DELETE FROM messages WHERE conv=?', id);
     this.run('DELETE FROM convs WHERE id=?', id);
@@ -89,20 +93,40 @@ class Store {
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
       m.id, m.conv, m.sender, m.ts, m.body || '', JSON.stringify(m.files || []), m.sealed ? 1 : 0, m.opened ? 1 : 0,
       m.auto ? 1 : 0, m.unread ? 1 : 0, JSON.stringify(m.recipients || []), JSON.stringify(m.delivered || []));
-    if (r.changes && (m.quote || m.locked || m.fwd)) this.run('UPDATE messages SET quote=?, locked=?, fwd=? WHERE id=?', m.quote ? JSON.stringify(m.quote) : null, m.locked ? 1 : 0, m.fwd ? 1 : 0, m.id);
+    if (r.changes && (m.quote || m.locked || m.fwd || m.sub)) this.run('UPDATE messages SET quote=?, locked=?, fwd=?, sub=? WHERE id=?', m.quote ? JSON.stringify(m.quote) : null, m.locked ? 1 : 0, m.fwd ? 1 : 0, m.sub || null, m.id);
     return r.changes > 0;
   }
   message(id) { return Store.row(this.get('SELECT * FROM messages WHERE id=?', id)); }
-  messages(conv, before, limit) {
-    return this.all('SELECT * FROM messages WHERE conv=? AND ts<? ORDER BY ts DESC, rowid DESC LIMIT ?',
-      conv, before || Number.MAX_SAFE_INTEGER, limit || 60).map(Store.row).reverse();
+  // sub: undefined = everything, '' = the main chat only, otherwise one sub-chat
+  messages(conv, before, limit, sub) {
+    const filter = sub === undefined ? '' : sub ? ' AND sub=?' : ' AND sub IS NULL';
+    const args = sub ? [conv, sub] : [conv];
+    return this.all(`SELECT * FROM messages WHERE conv=?${filter} AND ts<? ORDER BY ts DESC, rowid DESC LIMIT ?`,
+      ...args, before || Number.MAX_SAFE_INTEGER, limit || 60).map(Store.row).reverse();
   }
+  subs(conv) {
+    return this.all('SELECT id, name, (SELECT COUNT(*) FROM messages m WHERE m.conv=s.conv AND m.sub=s.id AND m.unread=1) unread FROM subs s WHERE conv=? ORDER BY created', conv);
+  }
+  addSub(conv, id, name) { return this.run('INSERT OR IGNORE INTO subs(conv,id,name,created) VALUES(?,?,?,?)', conv, id, name, Date.now()).changes > 0; }
+  removeSub(conv, id) {
+    this.run('UPDATE messages SET sub=NULL WHERE conv=? AND sub=?', conv, id);
+    this.run('DELETE FROM subs WHERE conv=? AND id=?', conv, id);
+  }
+  unreadMain(conv) { return this.get('SELECT COUNT(*) n FROM messages WHERE conv=? AND unread=1 AND sub IS NULL', conv).n; }
   lastMessage(conv) {
     return Store.row(this.get('SELECT * FROM messages WHERE conv=? ORDER BY ts DESC, rowid DESC LIMIT 1', conv));
   }
   unread(conv) { return this.get('SELECT COUNT(*) n FROM messages WHERE conv=? AND unread=1', conv).n; }
-  unreadMessages(conv) { return this.all('SELECT id, sender, sealed, opened FROM messages WHERE conv=? AND unread=1', conv); }
-  markRead(conv) { return this.run('UPDATE messages SET unread=0 WHERE conv=? AND unread=1', conv).changes; }
+  unreadMessages(conv, sub) {
+    return sub ? this.all('SELECT id, sender, sealed, opened FROM messages WHERE conv=? AND unread=1 AND sub=?', conv, sub)
+      : this.all('SELECT id, sender, sealed, opened FROM messages WHERE conv=? AND unread=1 AND sub IS NULL', conv);
+  }
+  markRead(conv, sub) {
+    return sub ? this.run('UPDATE messages SET unread=0 WHERE conv=? AND unread=1 AND sub=?', conv, sub).changes
+      : this.run('UPDATE messages SET unread=0 WHERE conv=? AND unread=1 AND sub IS NULL', conv).changes;
+  }
+  // a consistent copy of the whole database, for backups
+  snapshot(file) { this.db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`); }
   markDelivered(id, peer) {
     const m = this.message(id);
     if (!m || m.delivered.includes(peer)) return null;

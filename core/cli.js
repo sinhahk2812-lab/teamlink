@@ -14,7 +14,9 @@ const arg = (k) => { const i = process.argv.indexOf('--' + k); return i > 0 ? pr
   for (const k of ['name', 'teamCode', 'relayUrl']) if (arg(k) !== undefined) overrides[k] = arg(k);
   for (const k of ['udpPort', 'tcpPort']) if (arg(k) !== undefined) overrides[k] = Number(arg(k));
   if (arg('peers')) overrides.extraPeers = arg('peers').split(',');
-  const m = new Messenger(arg('data') || path.join(os.homedir(), '.teamlink'), overrides);
+  const dataDir = arg('data') || path.join(os.homedir(), '.teamlink');
+  Messenger.applyPendingRestore(dataDir);
+  const m = new Messenger(dataDir, overrides);
   await m.start();
   const s = await startServer(m, { port: Number(arg('port')) || 0, token: arg('token') });
   console.log('TeamLink is running. Open: ' + s.url);

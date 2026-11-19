@@ -3,7 +3,7 @@
 const TOKEN = new URLSearchParams(location.search).get('token') || '';
 const desk = window.desktop || null;
 const $ = (id) => document.getElementById(id);
-const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, locked: false, replyTo: null, progress: new Map(), results: null };
+const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, locked: false, replyTo: null, sub: '', progress: new Map(), results: null };
 
 // ---------------------------------------------------------------- tiny DOM helpers (text only, never innerHTML)
 function h(tag, props, ...kids) {
@@ -100,7 +100,7 @@ function onEvent(event, d) {
   else if (event === 'net') { S.net = d; renderNet(); }
   else if (event === 'message') onMessage(d);
   else if (event === 'file') onFile(d);
-  else if (event === 'incoming') notify(d);
+  else if (event === 'incoming') { pingAt.set(d.conv, Date.now()); renderSide(); notify(d); }
   else if (event === 'opened') toast(`${peerName(d.by)} opened your sealed message`);
 }
 
@@ -120,7 +120,17 @@ function memberName(c, id) {
 const dotOf = (p) => (!p || !p.online ? 'off' : p.status === 'away' ? 'away' : 'online');
 
 // ---------------------------------------------------------------- sidebar
-function renderAll() { renderMe(); renderNet(); renderSide(); updateTitle(); }
+// First paint: list rows slide in one after another. Re-renders during that second resume, not restart.
+function staggerBoot() {
+  if (!bootAt || Date.now() - bootAt > 1100) return;
+  const elapsed = Date.now() - bootAt;
+  document.querySelectorAll('#lists .item').forEach((el, i) => { el.style.animationDelay = `${i * 45 - elapsed}ms`; });
+}
+let booted = false, bootAt = 0;
+function renderAll() {
+  renderMe(); renderNet(); renderSide(); updateTitle();
+  if (!booted) { booted = true; bootAt = Date.now(); document.body.classList.add('boot'); staggerBoot(); setTimeout(() => document.body.classList.remove('boot'), 1100); }
+}
 
 // ---------------------------------------------------------------- appearance (theme, colour, font, size, wallpaper)
 const DEFAULT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -154,14 +164,15 @@ function applyAppearance(a) {
   document.body.dataset.style = a.style;
   document.body.dataset.motion = a.motion ? 'on' : 'off';
   const veil = `color-mix(in srgb, var(--bg) ${a.dim}%, transparent)`;
-  $('messages').style.backgroundImage = a.wall === 'image' ? `linear-gradient(${veil}, ${veil}), url("/wallpaper?token=${TOKEN}&v=${a.wallVer}")` : '';
+  $('messages').style.backgroundImage = a.wall === 'image' ? `linear-gradient(${veil}, ${veil}), url("/wallpaper?token=${TOKEN}&v=${a.wallVer}")`
+    : a.wall === 'paper' ? `linear-gradient(${veil}, ${veil}), url("/wall-paper.jpg")` : '';
 }
 
 const ACCENTS = ['#0d9488', '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#475569'];
 const FONTS = ['', 'Segoe UI', 'Calibri', 'Arial', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Georgia', 'Times New Roman', 'Courier New', 'Comic Sans MS'];
 function appearanceDialog() {
   const a = { ...S.me.config.appearance };
-  const save = (patch) => { Object.assign(a, patch); S.me.config.appearance = { ...a }; applyAppearance(a); rpc('setAppearance', patch).catch((e) => toast(e.message)); draw(); };
+  const save = (patch) => { document.body.classList.add('theming'); clearTimeout(save.t); save.t = setTimeout(() => document.body.classList.remove('theming'), 600); Object.assign(a, patch); S.me.config.appearance = { ...a }; applyAppearance(a); rpc('setAppearance', patch).catch((e) => toast(e.message)); draw(); };
   const mode = h('select', { onchange: () => save({ mode: mode.value }) }, h('option', { value: 'system' }, 'Same as the computer'), h('option', { value: 'light' }, 'Light'), h('option', { value: 'dark' }, 'Dark'));
   const look = h('select', { onchange: () => save({ style: look.value }) }, h('option', { value: 'glass' }, 'Glass (see-through panels, moving colours)'), h('option', { value: 'solid' }, 'Solid (plain, lightest on old PCs)'));
   const motion = h('input', { type: 'checkbox', onchange: () => save({ motion: motion.checked }) });
@@ -184,7 +195,7 @@ function appearanceDialog() {
     return h('div', { class: 'range-row' }, r, out);
   };
   const wall = h('select', { onchange: () => { if (wall.value === 'image' && !a.wallVer) return pick.click(); save({ wall: wall.value }); } },
-    h('option', { value: 'none' }, 'None'), h('option', { value: 'gradient' }, 'Soft colour gradient'), h('option', { value: 'dots' }, 'Dots'), h('option', { value: 'image' }, 'My own picture'));
+    h('option', { value: 'none' }, 'None'), h('option', { value: 'gradient' }, 'Soft colour gradient'), h('option', { value: 'dots' }, 'Dots'), h('option', { value: 'paper' }, 'White paper'), h('option', { value: 'image' }, 'My own picture'));
   const pick = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true, onchange: async () => {
     const file = pick.files[0]; pick.value = '';
     if (!file) return draw();
@@ -250,12 +261,12 @@ function renderSide() {
     let sub = last ? last.preview : c.type === 'all' ? 'Announcements for the whole team' : c.left ? 'You left this group' : `${c.members.length} members`;
     if (last && c.type !== 'dm') sub = (last.sender === S.me.id ? 'You' : memberName(c, last.sender).split(' ')[0]) + ': ' + sub;
     else if (last && last.sender === S.me.id) sub = 'You: ' + sub;
-    return h('li', { class: 'item' + (c.id === S.active ? ' active' : ''), onclick: () => openConv(c.id) },
+    return recent(pingAt, c.id, 1300, h('li', { class: 'item' + (c.id === S.active ? ' active' : ''), onclick: () => openConv(c.id) },
       avatar(c.type === 'dm' ? c.id.slice(3) : c.id, c.type === 'all' ? '📢' : convName(c), dm ? dotOf(dm) : null),
       h('div', { class: 'body' },
         h('div', { class: 'top' }, h('span', { class: 'name' }, convName(c)), last && h('span', { class: 'time' }, fmtWhen(last.ts))),
         h('div', { class: 'sub' }, sub)),
-      c.unread ? h('span', { class: 'badge' }, String(c.unread)) : null);
+      c.unread ? h('span', { class: 'badge' }, String(c.unread)) : null), 'ping');
   }));
 
   const peers = [...S.peers.values()].sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
@@ -277,6 +288,7 @@ function renderSide() {
   }
   if (!peers.length) nodes.push(h('li', { class: 'empty-note' }, 'Nobody found yet. Teammates appear here automatically when they start TeamLink on the same network with the same team code.'));
   $('peerList').replaceChildren(...nodes);
+  staggerBoot();
 }
 
 function renderResults() {
@@ -287,7 +299,7 @@ function renderResults() {
   for (const m of S.results) {
     const c = S.convs.get(m.conv);
     if (!c) continue;
-    nodes.push(h('li', { class: 'item', onclick: () => openConv(m.conv, m.id) },
+    nodes.push(h('li', { class: 'item', onclick: () => openConv(m.conv, m.id, m.sub || '') },
       avatar(c.type === 'dm' ? c.id.slice(3) : c.id, c.type === 'all' ? '📢' : convName(c)),
       h('div', { class: 'body' },
         h('div', { class: 'top' }, h('span', { class: 'name' }, convName(c)), h('span', { class: 'time' }, fmtWhen(m.ts))),
@@ -307,17 +319,19 @@ $('search').addEventListener('input', () => {
 function clearSearch() { $('search').value = ''; S.results = null; renderSide(); }
 
 // ---------------------------------------------------------------- chat
-async function openConv(id, focusMsg) {
+async function openConv(id, focusMsg, sub) {
   if (id.startsWith('dm:') && !S.convs.has(id)) S.convs.set(id, { id, type: 'dm', members: [], unread: 0, last: null });
   const changed = S.active !== id;
   S.active = id;
+  if (changed || sub !== undefined) S.sub = sub || '';
   if (desk && desk.setActiveConv) desk.setActiveConv(id);
   if (changed) { S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); }
   document.body.classList.add('in-chat');
   $('empty').hidden = true; $('chat').hidden = false;
   renderSide(); renderHead();
-  S.msgs = await call('getMessages', { conv: id, limit: focusMsg ? 200 : 80 });
-  if (S.active !== id) return;
+  const wantSub = S.sub;
+  S.msgs = await call('getMessages', { conv: id, sub: wantSub, limit: focusMsg ? 200 : 80 });
+  if (S.active !== id || S.sub !== wantSub) return;
   renderMessages(true);
   if (changed) { const box = $('messages'); box.classList.remove('swap'); void box.offsetWidth; box.classList.add('swap'); }
   if (focusMsg) {
@@ -336,7 +350,35 @@ function closeChat() {
 }
 function markRead() {
   const c = S.convs.get(S.active);
-  if (c && c.unread && document.hasFocus()) rpc('markRead', { conv: S.active }).catch(() => {});
+  if (!c || !document.hasFocus()) return;
+  const sub = (c.subs || []).find((x) => x.id === S.sub);
+  const waiting = S.sub ? sub && sub.unread : (c.unreadMain === undefined ? c.unread : c.unreadMain);
+  if (waiting) rpc('markRead', { conv: S.active, sub: S.sub || undefined }).catch(() => {});
+}
+
+// ---------------------------------------------------------------- sub-chats (topics inside a conversation)
+function renderSubs() {
+  const c = S.convs.get(S.active), bar = $('subBar');
+  if (!c || c.left) { bar.hidden = true; return; }
+  const subs = c.subs || [];
+  if (S.sub && !subs.some((x) => x.id === S.sub)) S.sub = '';
+  const tab = (id, label, unread) => h('button', { class: 'stab' + (S.sub === id ? ' on' : ''), onclick: () => { if (S.sub !== id) openConv(c.id, null, id); } },
+    h('span', null, label), unread ? h('b', null, String(unread)) : null,
+    id && S.sub === id ? h('i', { title: 'Remove this sub-chat', onclick: (e) => { e.stopPropagation(); removeSub(c, id, label); } }, '×') : null);
+  bar.hidden = false;
+  bar.replaceChildren(
+    ...(subs.length ? [tab('', 'Main', c.unreadMain), ...subs.map((x) => tab(x.id, x.name, x.unread))] : []),
+    h('button', { class: 'stab add', title: 'A sub-chat keeps one topic (a project, a client) separate inside this chat', onclick: () => newSub(c) }, subs.length ? '＋' : '＋ Sub-chat'));
+}
+function newSub(c) {
+  const name = h('input', { type: 'text', maxLength: 40, placeholder: 'e.g. Physiomove project, Invoices' });
+  modal('New sub-chat', [...field('Name', name, `A separate thread inside your chat with ${convName(c)}. Everyone in this chat sees it.`)],
+    { label: 'Create', run: async () => { const sub = await call('createSub', { conv: c.id, name: name.value }); setTimeout(() => openConv(c.id, null, sub.id), 0); } });
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('modalCard').querySelector('.actions .primary').click(); });
+}
+function removeSub(c, id, label) {
+  modal(`Remove "${label}"?`, [h('p', { class: 'hint' }, 'Its messages are not deleted: they move to the Main chat. This only changes your computer.')],
+    { label: 'Remove', danger: true, run: async () => { await call('deleteSub', { conv: c.id, sub: id }); setTimeout(() => openConv(c.id, null, ''), 0); } });
 }
 window.addEventListener('focus', markRead);
 
@@ -353,6 +395,7 @@ function renderHead() {
   else if (!dm.online) sub = 'Offline. Messages are delivered when they come back.';
   else sub = (dm.status === 'away' ? 'Away' + (dm.absenceMsg ? ': ' + dm.absenceMsg : '') : 'Online') + (dm.via === 'relay' ? ' · remote (via relay)' : ' · on your network') + (dm.dept ? ' · ' + dm.dept : '');
   $('chatSub').textContent = sub;
+  renderSubs();
   $('groupEditBtn').hidden = c.type !== 'group' || c.left;
   $('chatMenuBtn').hidden = c.type === 'all';
   $('sealBtn').hidden = c.type !== 'dm';
@@ -434,7 +477,16 @@ async function downloadAll(m) {
 
 // New messages pop in. The list is rebuilt on every update, so the animation is resumed from the
 // message's age instead of restarting each time.
-const freshAt = new Map();
+const freshAt = new Map(), seenAt = new Map(), pingAt = new Map();
+// Adds `cls` while an event recorded in `map` is younger than `ms`, resuming the animation from its age.
+function recent(map, id, ms, node, cls) {
+  const at = map.get(id);
+  if (!at) return node;
+  const age = Date.now() - at;
+  if (age > ms) { map.delete(id); return node; }
+  node.classList.add(cls); node.style.setProperty('--age', `-${age}ms`);
+  return node;
+}
 function freshClass(m, node) {
   const born = freshAt.get(m.id);
   if (!born) return node;
@@ -447,6 +499,8 @@ function freshClass(m, node) {
 
 function msgNode(m, c, showWho) {
   const bubble = h('div', { class: 'bubble' });
+  // one to three emoji and nothing else: show them big, without a bubble
+  if (!m.hidden && !m.files.length && !m.quote && !m.sealed && /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f|\s)+$/u.test(m.body) && [...m.body.matchAll(/\p{Extended_Pictographic}/gu)].length <= 3 && /\p{Extended_Pictographic}/u.test(m.body)) bubble.classList.add('jumbo');
   if (m.hidden) {
     bubble.append(h('div', { class: 'sealed-card' }, m.locked ? '🔑 Locked message' : '🔒 Sealed message',
       h('button', { onclick: () => (m.locked ? openLocked(m) : call('openSealed', { id: m.id })) }, 'Open')));
@@ -466,7 +520,7 @@ function msgNode(m, c, showWho) {
   if (m.mine && m.recipients) {
     const seenAll = m.recipients <= 1 ? !!m.readAt : m.seen >= m.recipients;
     const deliveredAll = m.delivered >= m.recipients;
-    ticks = h('span', { class: 'ticks' + (seenAll ? ' seen' : '') }, deliveredAll || seenAll ? '✓✓' : '✓');
+    ticks = recent(seenAt, m.id, 800, h('span', { class: 'ticks' + (seenAll ? ' seen' : '') }, deliveredAll || seenAll ? '✓✓' : '✓'), 'pop');
     if (m.recipients <= 1) detail = m.readAt ? `${m.sealed ? 'Opened' : 'Seen'} ${fmtTime(m.readAt)}` : m.delivered ? (m.sealed ? 'Delivered, not opened yet' : 'Delivered, not seen yet') : 'Waiting for them to come online';
     else detail = `Delivered to ${m.delivered} of ${m.recipients}` + (m.seen ? ` · Seen by ${m.seen}` : '');
   }
@@ -560,9 +614,11 @@ function renderMessages(toBottom) {
 }
 
 function onMessage(m) {
-  if (m.conv !== S.active) return;
+  if (m.conv !== S.active || (m.sub || '') !== S.sub) return;
   const i = S.msgs.findIndex((x) => x.id === m.id);
   if (i < 0) freshAt.set(m.id, Date.now());
+  const seenNow = (x) => (x.recipients <= 1 ? !!x.readAt : x.seen >= x.recipients);
+  if (i >= 0 && m.mine && seenNow(m) && !seenNow(S.msgs[i])) seenAt.set(m.id, Date.now());
   if (i >= 0) S.msgs[i] = m; else S.msgs.push(m);
   renderMessages(i < 0 && m.mine);
   if (i < 0 && !m.mine) markRead();
@@ -612,13 +668,15 @@ async function send() {
   if (!text.trim() && !S.pending.length) return;
   sending = true; $('sendBtn').disabled = true;
   try {
-    await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, paths: S.pending.map((a) => a.path) });
+    await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, sub: S.sub || undefined, paths: S.pending.map((a) => a.path) });
     $('input').value = ''; autoGrow(); toggleEmoji(false);
+    const sb = $('sendBtn'); sb.classList.remove('launch', 'ready'); void sb.offsetWidth; sb.classList.add('launch'); setTimeout(() => sb.classList.remove('launch'), 600);
     S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); renderHead();
   } catch {} finally { sending = false; $('sendBtn').disabled = false; $('input').focus(); }
 }
 function autoGrow() { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, 140) + 'px'; }
 $('input').addEventListener('input', autoGrow);
+$('input').addEventListener('input', () => $('sendBtn').classList.toggle('ready', !!$('input').value.trim()));
 $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 $('sendBtn').addEventListener('click', send);
 $('sealBtn').addEventListener('click', () => { S.sealed = !S.sealed; if (!S.sealed) S.locked = false; renderHead(); });
@@ -814,6 +872,62 @@ $('meBtn').addEventListener('click', () => {
   ], { label: 'Save', run: () => call('setProfile', { name: name.value, dept: dept.value, status: status.value, absenceMsg: msg.value }) });
 });
 
+// ---------------------------------------------------------------- backup and restore
+function backupKeyDialog(after) {
+  const k1 = h('input', { type: 'password', autocomplete: 'off' }), k2 = h('input', { type: 'password', autocomplete: 'off' });
+  modal(S.me.hasBackupKey ? 'Change backup key' : 'Set a backup key', [
+    h('p', { class: 'hint' }, 'Backups are locked with this key. Keep it simple enough to remember (at least 4 characters) and write it down: without it a backup cannot be opened.'),
+    ...field('Backup key', k1), ...field('Repeat it', k2),
+  ], { label: 'Save', run: async () => {
+    if (k1.value !== k2.value) { toast('The two keys do not match'); throw new Error('mismatch'); }
+    await call('setBackupKey', { key: k1.value });
+    S.me.hasBackupKey = true;
+    toast('Backup key saved');
+    if (after) setTimeout(after, 0);
+  } });
+}
+async function backupNow() {
+  if (!S.me.hasBackupKey) return backupKeyDialog(backupNow);
+  let target;
+  if (desk) { target = await desk.pickSave(`TeamLink-backup-${new Date().toISOString().slice(0, 10)}.tlbackup`); if (!target) return; }
+  const file = await call('createBackup', { target });
+  modal('Backup saved', [h('p', null, 'Your chats, settings and identity are saved in:'), h('p', { class: 'hint code' }, file),
+    h('p', { class: 'hint' }, 'Copy this file to a pen drive or another computer to be safe. Received files are not part of the backup.')], { label: 'OK', run: async () => {} });
+}
+function restoreDialog(path, fileName) {
+  const key = h('input', { type: 'password', autocomplete: 'off' });
+  modal('Restore from backup', [
+    h('p', { class: 'hint' }, `File: ${fileName}`),
+    ...field('Backup key', key, 'Restoring replaces the chats and settings on this computer with the ones from the backup. The current data is kept once, in case you need to go back.'),
+  ], { label: 'Restore', danger: true, run: async () => {
+    const info = await call('restoreBackup', { path, key: key.value });
+    setTimeout(() => modal('Restore ready', [h('p', null, `Backup of ${info.name || 'your account'}${info.made ? ' from ' + new Date(info.made).toLocaleString() : ''} is ready.`),
+      h('p', { class: 'hint' }, desk ? 'TeamLink will restart to finish.' : 'Close and start TeamLink again to finish.')],
+    { label: desk ? 'Restart now' : 'OK', run: async () => { if (desk) desk.restart(); } }), 0);
+  } });
+  key.focus();
+}
+function backupBox() {
+  const pick = h('input', { type: 'file', accept: '.tlbackup', hidden: true, onchange: async () => {
+    const file = pick.files[0]; pick.value = '';
+    if (!file) return;
+    try {
+      const r = await fetch(`/upload?token=${TOKEN}&name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+      if (!r.ok) throw new Error('Could not read that file');
+      restoreDialog((await r.json()).path, file.name);
+    } catch (e) { toast(e.message); }
+  } });
+  const status = !S.me.hasBackupKey ? 'No backup key set yet, so nothing is being backed up.'
+    : S.me.lastBackup ? `Last backup: ${new Date(S.me.lastBackup).toLocaleString()}` : 'Backup key is set. No backup made yet.';
+  return h('div', null,
+    h('p', { class: 'hint' }, status),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'ghost', type: 'button', onclick: backupNow }, 'Back up now'),
+      h('button', { class: 'ghost', type: 'button', onclick: () => pick.click() }, 'Restore from a backup…'),
+      h('button', { class: 'ghost', type: 'button', onclick: () => backupKeyDialog() }, S.me.hasBackupKey ? 'Change backup key' : 'Set backup key'), pick),
+    h('p', { class: 'hint' }, `With a key set, TeamLink also saves a backup by itself once a day in: ${S.me.backupDir}`));
+}
+
 function openSettings() {
   const c = S.me.config;
   const team = h('input', { type: 'text', value: c.teamCode, maxLength: 100, placeholder: 'At least 8 characters, given to you by your team' });
@@ -835,6 +949,8 @@ function openSettings() {
     ...field('Relay token', token),
     h('h3', null, 'Network'),
     ...field('Extra addresses to search', extra, 'One IP or broadcast address per line, for other subnets or VPNs where automatic discovery does not reach.'),
+    h('h3', null, 'Backup and restore'),
+    backupBox(),
     h('h3', null, 'Files'),
     ...field('Save received files to', dl),
     desk && h('label', null, askSave, ' Ask where to save each file (off: save straight to the folder above)'),

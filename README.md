@@ -13,6 +13,8 @@ directly. People working from home can join through a small optional relay.
 | Automatic member list | UDP broadcast discovery, grouped by department, online / away status |
 | 1-to-1 chat | Delivered and Seen receipts (groups show "Seen by N"); messages to offline people are delivered when they come back |
 | Message several people | Pick a few members and send one message, with files if needed; each gets it privately |
+| Sub-chats | Named topics inside any chat, each with its own messages and unread count |
+| Backup and restore | One encrypted file with identity, settings and history; daily automatic backup |
 | Group chats | Any member can rename the group, add or remove people, or leave |
 | Everyone channel | Broadcast to the whole team (IP Messenger's "broadcast") |
 | Locked messages | Like sealed, and the receiver must also type their own lock password |

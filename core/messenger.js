@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 const nodeCrypto = require('crypto');
+const zlib = require('zlib');
 const C = require('./crypto');
 const { Store } = require('./store');
 const { Lan } = require('./lan');
@@ -81,6 +82,8 @@ class Messenger extends EventEmitter {
     await this.startNet();
     this.timers.push(setInterval(() => this.tick(), 10000));
     this.timers.push(setInterval(() => this.hello('hello'), HELLO_EVERY));
+    this.timers.push(setInterval(() => this.autoBackup().catch(() => {}), 3600 * 1000));
+    setTimeout(() => this.autoBackup().catch(() => {}), 60 * 1000).unref();
   }
 
   async startNet() {
@@ -324,7 +327,7 @@ class Messenger extends EventEmitter {
     let f;
     try { f = JSON.parse(plain.subarray(1).toString()); } catch { return; }
     try {
-      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar }[f.t];
+      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub }[f.t];
       if (handler) handler.call(this, from, f);
     } catch (e) {
       this.ev('warn', 'frame error: ' + e.message);
@@ -352,7 +355,7 @@ class Messenger extends EventEmitter {
     return id;
   }
 
-  async send({ conv: convId, text, sealed, locked, replyTo, paths, auto, fwd, readyFiles }) {
+  async send({ conv: convId, text, sealed, locked, replyTo, paths, auto, fwd, readyFiles, sub }) {
     if (convId.startsWith('dm:')) { if (!this.peers.has(convId.slice(3))) throw new Error('Unknown member'); this.ensureDm(convId.slice(3)); }
     const conv = this.store.conv(convId);
     if (!conv) throw new Error('Unknown conversation');
@@ -364,16 +367,17 @@ class Messenger extends EventEmitter {
     if (files.length > 2000) throw new Error('Too many files (max 2000 per message)');
     const id = C.rid(), ts = Date.now();
     const recipients = this.recipientsOf(conv);
+    const subInfo = sub ? this.store.subs(convId).map(({ id: sid, name }) => ({ id: sid, name })).find((x) => x.id === String(sub)) || null : null;
     // A locked message is a sealed message that additionally needs the receiver's own password to open.
     const isLocked = !!locked && conv.type === 'dm';
     const isSealed = (!!sealed || isLocked) && conv.type === 'dm';
     let quote = null;
     const q = replyTo ? this.store.message(String(replyTo)) : null;
     if (q && q.conv === convId && !q.sealed) quote = { id: q.id, sender: q.sender, text: q.body.trim().slice(0, 200) || 'Attachment' };
-    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, opened: 1, auto, recipients });
+    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, sub: subInfo && subInfo.id, opened: 1, auto, recipients });
     for (const f of files) this.store.saveFile({ ...f, msg: id, owner: this.me.id, state: 'local' });
     this.store.touchConv(convId, ts);
-    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, auto: !!auto,
+    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, sub: subInfo || undefined, auto: !!auto,
       files: files.map(({ fid, name, size, mime }) => ({ fid, name, size, mime })) };
     for (const r of recipients) this.deliver(r, frame);
     const view = this.msgView(this.store.message(id));
@@ -412,17 +416,56 @@ class Messenger extends EventEmitter {
     }
   }
 
+  // Which local conversation a frame from `from` belongs to ('dm', 'all' or a group id on the wire).
+  convFromWire(from, wire) {
+    if (wire === 'dm') return this.ensureDm(from);
+    if (wire === 'all') return 'all';
+    const g = this.store.conv(String(wire));
+    return g && g.type === 'group' && !g.left_group && g.members.some((m) => m.id === from) ? g.id : null;
+  }
+
+  // ---- sub-chats: named topics inside a conversation. Everyone in the conversation gets the same list.
+  adoptSub(convId, sub) {
+    if (!sub || typeof sub !== 'object' || !/^[0-9a-f]{12}$/.test(String(sub.id))) return null;
+    if (this.store.addSub(convId, sub.id, clip(sub.name, 40) || 'Sub-chat')) this.ev('conv', this.convView(this.store.conv(convId)));
+    return sub.id;
+  }
+
+  createSub({ conv: convId, name }) {
+    if (String(convId).startsWith('dm:') && this.peers.has(convId.slice(3))) this.ensureDm(convId.slice(3));
+    const conv = this.store.conv(String(convId));
+    if (!conv || conv.left_group) throw new Error('Unknown conversation');
+    const label = clip(name, 40);
+    if (!label) throw new Error('Give the sub-chat a name');
+    if (this.store.subs(conv.id).length >= 30) throw new Error('This chat already has 30 sub-chats');
+    const sub = { id: C.rid(6), name: label };
+    this.store.addSub(conv.id, sub.id, sub.name);
+    const frame = { t: 'sub', id: 'sub:' + C.rid(8), conv: conv.type === 'dm' ? 'dm' : conv.id, sub };
+    for (const r of this.recipientsOf(conv)) this.deliver(r, frame);
+    this.ev('conv', this.convView(this.store.conv(conv.id)));
+    return sub;
+  }
+
+  onSub(from, f) {
+    const convId = this.convFromWire(from, f.conv);
+    if (!convId) return;
+    this.ack(from, f.id);
+    this.adoptSub(convId, f.sub);
+  }
+
+  // Removing a sub-chat is local: its messages move back to the main chat, nothing is lost.
+  deleteSub({ conv: convId, sub }) {
+    this.store.removeSub(String(convId), String(sub));
+    const conv = this.store.conv(String(convId));
+    if (conv) this.ev('conv', this.convView(conv));
+  }
+
   onMsg(from, f) {
     if (typeof f.id !== 'string' || f.id.length > 64) return;
-    let convId;
-    if (f.conv === 'dm') convId = this.ensureDm(from);
-    else if (f.conv === 'all') convId = 'all';
-    else {
-      const g = this.store.conv(String(f.conv));
-      // Unknown group: do not ack, the sender retries and the group definition arrives meanwhile.
-      if (!g || g.type !== 'group' || g.left_group || !g.members.some((m) => m.id === from)) return;
-      convId = g.id;
-    }
+    // Unknown group: do not ack, the sender retries and the group definition arrives meanwhile.
+    const convId = this.convFromWire(from, f.conv);
+    if (!convId) return;
+    const subId = this.adoptSub(convId, f.sub);
     const ts = Math.min(Number(f.ts) || Date.now(), Date.now());
     const sealed = !!f.sealed && f.conv === 'dm';
     const files = Array.isArray(f.files) ? f.files.slice(0, 2000) : [];
@@ -431,7 +474,7 @@ class Messenger extends EventEmitter {
       quote = { id: String(f.quote.id || '').slice(0, 64), sender: f.quote.sender, text: String(f.quote.text || '').slice(0, 200) };
     }
     const fresh = this.store.addMessage({ id: f.id, conv: convId, sender: from, ts, body: String(f.body || '').slice(0, 20000), sealed,
-      locked: sealed && !!f.locked, quote, fwd: !!f.fwd, auto: !!f.auto, unread: 1 });
+      locked: sealed && !!f.locked, quote, fwd: !!f.fwd, sub: subId, auto: !!f.auto, unread: 1 });
     this.ack(from, f.id);
     if (!fresh) return;
     for (const x of files) {
@@ -510,14 +553,14 @@ class Messenger extends EventEmitter {
 
   // Called when the user is actually looking at the conversation: clears the unread count
   // and tells each sender that their messages were seen.
-  markRead(convId) {
+  markRead(convId, sub) {
     const bySender = new Map();
-    for (const m of this.store.unreadMessages(convId)) {
+    for (const m of this.store.unreadMessages(convId, sub)) {
       if (m.sealed && !m.opened) continue; // a sealed message counts as seen only when it is opened
       if (!bySender.has(m.sender)) bySender.set(m.sender, []);
       bySender.get(m.sender).push(m.id);
     }
-    if (!this.store.markRead(convId)) return;
+    if (!this.store.markRead(convId, sub)) return;
     for (const [sender, mids] of bySender) {
       if (this.peers.has(sender)) this.deliver(sender, { t: 'read', id: 'r:' + C.rid(8), mids });
     }
@@ -530,7 +573,7 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, quote: hidden ? null : m.quote, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, sub: m.sub || '', quote: hidden ? null : m.quote, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {
@@ -541,7 +584,7 @@ class Messenger extends EventEmitter {
       else preview = last.body.trim().slice(0, 80) || (this.store.filesOf(last.id).length ? 'Attachment' : '');
     }
     return { id: c.id, type: c.type, name: c.name, members: c.members.map((m) => ({ id: m.id, name: m.name })), left: !!c.left_group,
-      updated: c.updated, unread: this.store.unread(c.id), last: last ? { sender: last.sender, ts: last.ts, preview } : null };
+      updated: c.updated, unread: this.store.unread(c.id), unreadMain: this.store.unreadMain(c.id), subs: this.store.subs(c.id), last: last ? { sender: last.sender, ts: last.ts, preview } : null };
   }
 
   // ------------------------------------------------------------------ groups
@@ -755,9 +798,11 @@ class Messenger extends EventEmitter {
     this.ev('me', this.meView());
   }
 
-  async setConfig({ teamCode, relayUrl, relayToken, extraPeers, downloadDir, popup, askSave }) {
+  async setConfig({ teamCode, relayUrl, relayToken, extraPeers, downloadDir, popup, askSave, autoBackup, backupDir }) {
     const c = this.cfg;
     if (askSave !== undefined) c.askSave = !!askSave;
+    if (autoBackup !== undefined) c.autoBackup = !!autoBackup;
+    if (backupDir) c.backupDir = String(backupDir);
     if (popup !== undefined) c.popup = !!popup;
     const netBefore = JSON.stringify([c.teamCode, c.relayUrl, c.relayToken, c.extraPeers]);
     if (teamCode !== undefined) {
@@ -783,6 +828,94 @@ class Messenger extends EventEmitter {
     this.ev('net', this.netState());
   }
 
+  // ---- backup & restore
+  // A backup is one file: identity, settings, chat history, profile photo and wallpaper, gzip-compressed and
+  // encrypted (scrypt + AES-256-GCM) with a key the user chooses. Received files are not included.
+  backupDir() { return this.cfg.backupDir || path.join(os.homedir(), 'Documents', 'TeamLink Backups'); }
+
+  setBackupKey({ key }) {
+    if (String(key || '').length < 4) throw new Error('The backup key must be at least 4 characters long');
+    const salt = nodeCrypto.randomBytes(16);
+    this.cfg.backup = { salt: salt.toString('hex'), key: nodeCrypto.scryptSync(String(key), salt, 32).toString('hex') };
+    this.saveCfg();
+    this.ev('me', this.meView());
+    this.autoBackup(true).catch(() => {});
+  }
+
+  async createBackup(target) {
+    if (!this.cfg.backup) throw new Error('Set a backup key first');
+    const file = target && path.isAbsolute(target) ? target
+      : path.join(this.backupDir(), `TeamLink-backup-${new Date().toISOString().slice(0, 10)}.tlbackup`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const snap = path.join(this.dataDir, 'backup-snapshot.db');
+    fs.rmSync(snap, { force: true });
+    this.store.snapshot(snap);
+    const files = { 'config.json': fs.readFileSync(this.cfgPath).toString('base64'), 'teamlink.db': fs.readFileSync(snap).toString('base64') };
+    fs.rmSync(snap, { force: true });
+    for (const name of ['avatar.img', 'wallpaper.img']) { const p = path.join(this.dataDir, name); if (fs.existsSync(p)) files[name] = fs.readFileSync(p).toString('base64'); }
+    for (const name of fs.readdirSync(path.join(this.dataDir, 'avatars'))) if (/^[0-9a-f]{20}\.img$/.test(name)) files['avatars/' + name] = fs.readFileSync(path.join(this.dataDir, 'avatars', name)).toString('base64');
+    const plain = zlib.gzipSync(Buffer.from(JSON.stringify({ version: 1, made: Date.now(), name: this.cfg.name, files })));
+    const nonce = nodeCrypto.randomBytes(12);
+    const c = nodeCrypto.createCipheriv('aes-256-gcm', Buffer.from(this.cfg.backup.key, 'hex'), nonce);
+    const body = Buffer.concat([c.update(plain), c.final()]);
+    fs.writeFileSync(file + '.tmp', Buffer.concat([Buffer.from('TLBK1'), Buffer.from(this.cfg.backup.salt, 'hex'), nonce, body, c.getAuthTag()]));
+    fs.renameSync(file + '.tmp', file);
+    this.cfg.lastBackup = Date.now();
+    this.saveCfg();
+    this.ev('me', this.meView());
+    return file;
+  }
+
+  // Once a day, when a backup key is set. Keeps the five newest automatic backups.
+  async autoBackup(force) {
+    if (!this.cfg.backup || this.cfg.autoBackup === false) return;
+    if (!force && Date.now() - (this.cfg.lastBackup || 0) < 24 * 3600 * 1000) return;
+    await this.createBackup();
+    const dir = this.backupDir();
+    const old = fs.readdirSync(dir).filter((n) => /^TeamLink-backup-\d{4}-\d\d-\d\d\.tlbackup$/.test(n)).sort().reverse().slice(5);
+    for (const n of old) fs.rmSync(path.join(dir, n), { force: true });
+  }
+
+  // Checks the key and stages the backup's contents; they replace the current data at the next start.
+  restoreBackup({ path: file, key }) {
+    let buf;
+    try { buf = fs.readFileSync(String(file)); } catch { throw new Error('Could not read that file'); }
+    if (buf.length < 50 || buf.toString('latin1', 0, 5) !== 'TLBK1') throw new Error('This is not a TeamLink backup file');
+    let data;
+    try {
+      const d = nodeCrypto.createDecipheriv('aes-256-gcm', nodeCrypto.scryptSync(String(key || ''), buf.subarray(5, 21), 32), buf.subarray(21, 33));
+      d.setAuthTag(buf.subarray(buf.length - 16));
+      data = JSON.parse(zlib.gunzipSync(Buffer.concat([d.update(buf.subarray(33, buf.length - 16)), d.final()])).toString());
+    } catch { throw new Error('Wrong backup key'); }
+    const stage = path.join(this.dataDir, 'restore-pending');
+    fs.rmSync(stage, { recursive: true, force: true });
+    fs.mkdirSync(path.join(stage, 'avatars'), { recursive: true });
+    for (const [name, b64] of Object.entries(data.files || {})) {
+      if (!/^(config\.json|teamlink\.db|avatar\.img|wallpaper\.img|avatars\/[0-9a-f]{20}\.img)$/.test(name)) continue;
+      fs.writeFileSync(path.join(stage, name), Buffer.from(String(b64), 'base64'));
+    }
+    if (!fs.existsSync(path.join(stage, 'config.json')) || !fs.existsSync(path.join(stage, 'teamlink.db'))) { fs.rmSync(stage, { recursive: true, force: true }); throw new Error('The backup is incomplete'); }
+    fs.writeFileSync(path.join(stage, 'READY'), '1');
+    return { name: data.name || '', made: data.made || 0 };
+  }
+
+  // Run before the engine starts: swaps in a staged restore. The previous data is kept next to it once.
+  static applyPendingRestore(dataDir) {
+    const stage = path.join(dataDir, 'restore-pending');
+    if (!fs.existsSync(path.join(stage, 'READY'))) return false;
+    const keep = path.join(dataDir, 'before-restore');
+    fs.rmSync(keep, { recursive: true, force: true });
+    fs.mkdirSync(keep, { recursive: true });
+    for (const name of ['config.json', 'teamlink.db', 'avatar.img', 'wallpaper.img']) { const p = path.join(dataDir, name); if (fs.existsSync(p)) fs.renameSync(p, path.join(keep, name)); }
+    for (const name of ['teamlink.db-wal', 'teamlink.db-shm']) fs.rmSync(path.join(dataDir, name), { force: true });
+    fs.mkdirSync(path.join(dataDir, 'avatars'), { recursive: true });
+    const copy = (rel) => fs.copyFileSync(path.join(stage, rel), path.join(dataDir, rel));
+    for (const name of fs.readdirSync(stage)) if (name !== 'READY' && name !== 'avatars') copy(name);
+    for (const name of fs.readdirSync(path.join(stage, 'avatars'))) copy(path.join('avatars', name));
+    fs.rmSync(stage, { recursive: true, force: true });
+    return true;
+  }
+
   // ---- look and feel (per user, stored on this computer)
   appearance() {
     const a = this.cfg.appearance || {};
@@ -793,7 +926,7 @@ class Messenger extends EventEmitter {
       font: String(a.font || '').replace(/[^\w .\-]/g, '').trim().slice(0, 60),
       msgSize: num(a.msgSize, 11, 26, 14),
       zoom: num(a.zoom, 75, 160, 100),
-      wall: ['gradient', 'dots', 'image'].includes(a.wall) ? a.wall : 'none',
+      wall: ['gradient', 'dots', 'image', 'paper'].includes(a.wall) ? a.wall : 'none',
       dim: num(a.dim, 0, 90, 35),
       wallVer: num(a.wallVer, 0, 1e9, 0),
       style: a.style === 'solid' ? 'solid' : 'glass',
@@ -818,7 +951,7 @@ class Messenger extends EventEmitter {
 
   meView() {
     const c = this.cfg;
-    return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(), hasLock: !!c.lock, avatar: c.avatar || '',
+    return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(), hasLock: !!c.lock, hasBackupKey: !!c.backup, autoBackup: c.autoBackup !== false, backupDir: this.backupDir(), lastBackup: c.lastBackup || 0, avatar: c.avatar || '',
       config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false, appearance: this.appearance(), recentEmoji: c.recentEmoji || [] } };
   }
 
@@ -827,8 +960,8 @@ class Messenger extends EventEmitter {
       convs: this.store.convs().map((c) => this.convView(c)) };
   }
 
-  getMessages({ conv, before, limit }) {
-    return this.store.messages(String(conv), before, Math.min(Number(limit) || 60, 200)).map((m) => this.msgView(m));
+  getMessages({ conv, before, limit, sub }) {
+    return this.store.messages(String(conv), before, Math.min(Number(limit) || 60, 200), sub === undefined || sub === null ? undefined : String(sub)).map((m) => this.msgView(m));
   }
 
   search({ text }) {
