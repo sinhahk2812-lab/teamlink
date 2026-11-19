@@ -83,7 +83,18 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   B.openSealed(s1.id);
   assert.equal(msgs(B, 'dm:' + A.me.id).find((m) => m.id === s1.id).body, 'salary sheet password: 1234');
   await until('open notice', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === s1.id).readAt);
-  ok('sealed message stays hidden until opened; sender gets the open notice');
+  // secure everywhere: sender's own view, chat list on both sides, search after opening, and it hides again
+  assert.ok(msgs(A, 'dm:' + B.me.id).find((m) => m.id === s1.id).hidden && s1.body === '');
+  for (const m of [A, B]) assert.ok(!JSON.stringify(m.getState().convs).includes('salary'));
+  assert.equal(B.search({ text: 'salary' }).length + A.search({ text: 'salary' }).length, 0);
+  B.hideSealed();
+  const rehidden = msgs(B, 'dm:' + A.me.id).find((m) => m.id === s1.id);
+  assert.ok(rehidden.hidden && rehidden.opened && rehidden.body === '');
+  B.openSealed(s1.id); A.openSealed(s1.id);
+  assert.equal(msgs(B, 'dm:' + A.me.id).find((m) => m.id === s1.id).body, 'salary sheet password: 1234');
+  assert.equal(msgs(A, 'dm:' + B.me.id).find((m) => m.id === s1.id).body, 'salary sheet password: 1234');
+  A.hideSealed(); B.hideSealed();
+  ok('sealed message stays hidden until opened; sender gets the open notice; it hides again and never shows in lists or search');
 
   // locked message: needs the receiver's own password
   const l1 = await A.send({ conv: 'dm:' + B.me.id, text: 'bank OTP 554433', locked: true });
@@ -96,6 +107,9 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   B.openSealed(l1.id, 'bilal-secret');
   assert.equal(msgs(B, 'dm:' + A.me.id).find((m) => m.id === l1.id).body, 'bank OTP 554433');
   await until('locked open notice', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === l1.id).readAt);
+  B.hideSealed();
+  assert.throws(() => B.openSealed(l1.id, 'wrong'), /Wrong password/); // the password is needed again for every view
+  assert.ok(msgs(B, 'dm:' + A.me.id).find((m) => m.id === l1.id).hidden);
   assert.throws(() => B.setLockPassword({ current: 'nope', next: 'new-one' }), /current password is wrong/);
   assert.ok(!JSON.stringify(B.getState()).includes('bilal-secret') && !fs.readFileSync(path.join(tmp, 'Bilal', 'config.json'), 'utf8').includes('bilal-secret'));
   ok('locked message opens only with the receiver\'s lock password');

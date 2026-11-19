@@ -77,6 +77,9 @@ async function start() {
   messenger.on('event', (name, d) => { if (name === 'intakeAlert') onIntakeAlert(d); }); // WHATSAPP-INTAKE
   win.on('focus', () => { win.flashFrame(false); hidePopup(); });
   win.on('hide', installIfReady);
+  // Sealed messages that were open are hidden again as soon as the window is put away or minimised.
+  win.on('hide', () => messenger.hideSealed());
+  win.on('minimize', () => messenger.hideSealed());
   setupUpdates();
 
   // Installed app: start with the computer by default, once. It can be switched off in Settings.
@@ -141,7 +144,7 @@ function onOpened(d) {
   const peer = messenger.peers.get(d.by);
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   popupData = { conv: d.conv, count: 1, title: `${(peer && peer.name) || 'Someone'} opened your message`,
-    body: messenger.popupPrefs().showText ? d.preview : 'Sealed message', note: `Opened at ${time} · click to open the chat`, ...popupFace(d.by, peer && peer.name) };
+    body: d.locked ? '🔑 Your locked message was opened' : '🔒 Your sealed message was opened', note: `Opened at ${time} · click to open the chat`, ...popupFace(d.by, peer && peer.name) };
   showPopup();
 }
 

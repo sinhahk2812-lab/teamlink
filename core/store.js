@@ -136,9 +136,9 @@ class Store {
   }
   search(text, limit) {
     const like = '%' + text.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
-    // Unopened sealed messages stay out of search results.
+    // Sealed and locked messages never appear in search results.
     return this.all(`SELECT * FROM messages WHERE (body LIKE ? ESCAPE '\\' OR id IN (SELECT msg FROM files WHERE name LIKE ? ESCAPE '\\'))
-      AND NOT (sealed=1 AND opened=0) ORDER BY ts DESC LIMIT ?`, like, like, limit || 80).map(Store.row);
+      AND sealed=0 ORDER BY ts DESC LIMIT ?`, like, like, limit || 80).map(Store.row);
   }
 
   // ---- files

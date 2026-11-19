@@ -157,6 +157,7 @@ function startServer(messenger, { port = 0, token } = {}) {
     createBackup: (p) => messenger.createBackup(p.target ? String(p.target) : undefined),
     restoreBackup: (p) => messenger.restoreBackup(p),
     openSealed: (p) => messenger.openSealed(String(p.id), p.password),
+    hideSealed: (p) => messenger.hideSealed(p && p.id ? String(p.id) : undefined),
     setLockPassword: (p) => messenger.setLockPassword(p),
     downloadAll: (p) => messenger.downloadAll(String(p.msg), p.dir ? String(p.dir) : undefined),
     forward: (p) => messenger.forward({ id: p.id, convs: p.convs }),

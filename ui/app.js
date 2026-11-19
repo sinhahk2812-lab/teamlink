@@ -329,6 +329,7 @@ async function openConv(id, focusMsg, sub) {
   const changed = S.active !== id;
   S.active = id;
   if (changed || sub !== undefined) S.sub = sub || '';
+  if (changed) rpc('hideSealed', {}).catch(() => {});
   if (desk && desk.setActiveConv) desk.setActiveConv(id);
   if (changed) { S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); }
   document.body.classList.add('in-chat');
@@ -347,6 +348,7 @@ async function openConv(id, focusMsg, sub) {
   if (!matchMedia('(max-width: 720px)').matches) $('input').focus();
 }
 function closeChat() {
+  rpc('hideSealed', {}).catch(() => {}); // leaving the chat hides any sealed message that was open
   S.active = null; S.msgs = [];
   if (desk && desk.setActiveConv) desk.setActiveConv(null);
   document.body.classList.remove('in-chat');
@@ -507,10 +509,15 @@ function msgNode(m, c, showWho) {
   // one to three emoji and nothing else: show them big, without a bubble
   if (!m.hidden && !m.files.length && !m.quote && !m.sealed && /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f|\s)+$/u.test(m.body) && [...m.body.matchAll(/\p{Extended_Pictographic}/gu)].length <= 3 && /\p{Extended_Pictographic}/u.test(m.body)) bubble.classList.add('jumbo');
   if (m.hidden) {
-    bubble.append(h('div', { class: 'sealed-card' }, m.locked ? '🔑 Locked message' : '🔒 Sealed message',
-      h('button', { onclick: () => (m.locked ? openLocked(m) : call('openSealed', { id: m.id })) }, 'Open')));
+    // Secret until opened, and secret again a minute later. A locked one asks for the password every time
+    // (for my own locked messages only if I have a lock password).
+    const needsPassword = m.locked && (!m.mine || S.me.hasLock);
+    const label = (m.locked ? '🔑 Locked message' : '🔒 Sealed message') + (m.mine ? ' you sent' : m.opened ? ' · opened before' : '');
+    bubble.append(h('div', { class: 'sealed-card' }, label,
+      h('button', { onclick: () => (needsPassword ? openLocked(m) : call('openSealed', { id: m.id })) }, m.mine || m.opened ? 'View' : 'Open')));
   } else {
-    if (m.sealed) bubble.append(h('span', { class: 'tag' }, m.locked ? '🔑 Locked' : '🔒 Sealed'));
+    if (m.sealed) bubble.append(h('span', { class: 'tag' }, (m.locked ? '🔑 Locked' : '🔒 Sealed') + ' · hides again in a minute ',
+      h('button', { class: 'hide-now', onclick: () => rpc('hideSealed', { id: m.id }).catch(() => {}) }, 'Hide now')));
     if (m.quote) bubble.append(h('span', { class: 'quote', onclick: () => jumpTo(m.quote.id) }, h('b', null, memberName(c, m.quote.sender)), h('span', null, m.quote.text)));
     if (m.auto) bubble.append(h('span', { class: 'tag' }, 'Automatic reply'));
     if (m.fwd) bubble.append(h('span', { class: 'tag' }, '↪ Forwarded'));
@@ -592,7 +599,7 @@ function lockPasswordDialog(after) {
   (cur || next).focus();
 }
 function openLocked(m) {
-  if (!S.me.hasLock) return lockPasswordDialog(() => openLocked(m));
+  if (!S.me.hasLock && !m.mine) return lockPasswordDialog(() => openLocked(m));
   const pw = h('input', { type: 'password', autocomplete: 'off' });
   modal('Locked message', [...field('Your lock password', pw, 'The sender is told when you open it.')],
     { label: 'Open', run: () => call('openSealed', { id: m.id, password: pw.value }) });

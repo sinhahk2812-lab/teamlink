@@ -16,6 +16,7 @@ const { Intake } = require('./intake'); // WHATSAPP-INTAKE
 const HELLO_EVERY = 20000;
 const LAN_STALE = 70000;
 const CHUNK = 60 * 1024;
+const REVEAL_MS = 60 * 1000; // how long an opened sealed message stays readable
 const AUTO_IMAGE_MAX = 10 * 1024 * 1024;
 const OUTBOX_TTL = 7 * 24 * 3600 * 1000;
 const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp' };
@@ -526,19 +527,45 @@ class Messenger extends EventEmitter {
     this.ev('me', this.meView());
   }
 
+  // Sealed and locked messages are secret by default, on both sides and every time:
+  //   * the text is only handed to the screen for a short while after "Open", then it is hidden again;
+  //   * a locked message asks for the lock password on every view;
+  //   * the chat list, search, popups and quotes never show its text.
+  // The sender is told only about the first opening.
   openSealed(id, password) {
     const m = this.store.message(id);
-    if (!m || !m.sealed || m.opened || m.sender === this.me.id) return;
-    if (m.locked) {
+    if (!m || !m.sealed) return;
+    const mine = m.sender === this.me.id;
+    if (m.locked && (!mine || this.cfg.lock)) {
       if (!this.cfg.lock) throw new Error('Set your lock password first');
       if (!this.checkLockPassword(password || '')) throw new Error('Wrong password');
     }
-    this.store.run('UPDATE messages SET opened=1, read_at=? WHERE id=?', Date.now(), id);
-    this.deliver(m.sender, { t: 'read', id: 'r:' + id, mid: id });
+    if (!mine && !m.opened) {
+      this.store.run('UPDATE messages SET opened=1, read_at=? WHERE id=?', Date.now(), id);
+      this.deliver(m.sender, { t: 'read', id: 'r:' + id, mid: id });
+    }
+    this.revealed = this.revealed || new Map();
+    clearTimeout((this.revealed.get(id) || {}).timer);
+    const timer = setTimeout(() => this.hideSealed(id), REVEAL_MS);
+    if (timer.unref) timer.unref();
+    this.revealed.set(id, { until: Date.now() + REVEAL_MS, timer });
     const fresh = this.store.message(id);
-    this.autoFetchImages(fresh);
+    if (!mine) this.autoFetchImages(fresh);
     this.ev('message', this.msgView(fresh));
     this.ev('conv', this.convView(this.store.conv(m.conv)));
+  }
+
+  // Hide one revealed message again (or all of them: when the user leaves the chat, or the timer runs out).
+  hideSealed(id) {
+    if (!this.revealed) return;
+    for (const mid of id ? [id] : [...this.revealed.keys()]) {
+      const r = this.revealed.get(mid);
+      if (!r) continue;
+      clearTimeout(r.timer);
+      this.revealed.delete(mid);
+      const m = this.store.message(mid);
+      if (m) this.ev('message', this.msgView(m));
+    }
   }
 
   // "Seen" notices. One frame may confirm several messages; `mid` is the older single-message form.
@@ -552,7 +579,7 @@ class Messenger extends EventEmitter {
       this.store.run('UPDATE messages SET read_by=?, read_at=COALESCE(read_at, ?) WHERE id=?', JSON.stringify(m.read_by), Date.now(), m.id);
       this.ev('message', this.msgView(this.store.message(m.id)));
       // IP Messenger style "opened" notice for sealed messages
-      if (m.sealed) this.ev('opened', { conv: m.conv, by: from, id: m.id, preview: m.body.trim().slice(0, 80) || 'Attachment' });
+      if (m.sealed) this.ev('opened', { conv: m.conv, by: from, id: m.id, locked: !!m.locked });
     }
   }
 
@@ -573,19 +600,20 @@ class Messenger extends EventEmitter {
   }
 
   msgView(m) {
-    const hidden = m.sealed && !m.opened && m.sender !== this.me.id;
+    const shown = this.revealed && this.revealed.get(m.id);
+    const hidden = !!m.sealed && !(shown && shown.until > Date.now());
     const files = hidden ? [] : this.store.filesOf(m.id).map((f) => ({
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, sub: m.sub || '', quote: hidden ? null : m.quote, hidden, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, sub: m.sub || '', quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {
     const last = this.store.lastMessage(c.id);
     let preview = '';
     if (last) {
-      if (last.sealed && !last.opened && last.sender !== this.me.id) preview = 'Sealed message';
+      if (last.sealed) preview = last.locked ? '🔑 Locked message' : '🔒 Sealed message'; // never the text, for either side
       else preview = last.body.trim().slice(0, 80) || (this.store.filesOf(last.id).length ? 'Attachment' : '');
     }
     return { id: c.id, type: c.type, name: c.name, members: c.members.map((m) => ({ id: m.id, name: m.name })), left: !!c.left_group,
