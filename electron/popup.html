@@ -38,6 +38,23 @@
   #close { position: absolute; top: 10px; right: 12px; width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.14);
     color: var(--ink); font-size: 18px; line-height: 1; cursor: pointer; z-index: 2; }
   #close:hover { background: rgba(255,255,255,.34); }
+  /* other designs (popup settings) */
+  body[data-design="solid"] .card { background: rgb(var(--tint)); border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent); border-left: 8px solid var(--accent); border-radius: 18px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.34); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  body[data-design="solid"] .card::before, body[data-design="solid"] .card::after, body[data-design="minimal"] .card::before, body[data-design="minimal"] .card::after { display: none; }
+  body[data-design="solid"] .badge { background: color-mix(in srgb, var(--accent) 22%, transparent); border-color: transparent; box-shadow: none; border-radius: 14px; }
+  body[data-design="minimal"] .card { background: rgba(var(--tint), .94); border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent); border-radius: 999px; padding: 10px 26px 10px 14px;
+    box-shadow: 0 5px 14px rgba(0,0,0,.28); -webkit-backdrop-filter: none; backdrop-filter: none; height: auto; margin-top: 26px; }
+  body[data-design="minimal"] .badge { width: 44px; height: 44px; border-radius: 50%; background: var(--accent); border: 0; box-shadow: none; }
+  body[data-design="minimal"] img { width: 28px; height: 28px; filter: brightness(0) invert(1); }
+  body[data-design="minimal"] #body { -webkit-line-clamp: 1; }
+  body[data-design="minimal"] #more { display: none; }
+  body[data-design="minimal"] #close { top: 50%; transform: translateY(-50%); right: 14px; }
+  body[data-design="neon"] .card { background: rgba(8, 10, 20, .92); border: 2px solid var(--accent); border-radius: 22px; color: #fff; --ink: #fff; --soft: rgba(255,255,255,.8);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 80%, transparent), inset 0 0 18px color-mix(in srgb, var(--accent) 28%, transparent); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  body[data-design="neon"] .card::before { display: none; }
+  body[data-design="neon"] #title { color: var(--accent); text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 70%, transparent); }
+  body[data-design="neon"] .badge { background: none; border: 2px solid var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 70%, transparent); }
   @keyframes pulse { 0% { transform: scale(1); } 35% { transform: scale(1.035); } 100% { transform: scale(1); } }
   @keyframes ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-8deg); } 80% { transform: rotate(5deg); } }
   .text.pulse { animation: pulse .35s ease-out; }

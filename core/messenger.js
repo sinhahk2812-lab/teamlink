@@ -942,6 +942,29 @@ class Messenger extends EventEmitter {
     this.ev('me', this.meView());
   }
 
+  // ---- how the message popup looks and behaves (desktop app)
+  popupPrefs() {
+    const p = this.cfg.popupPrefs || {};
+    const pick = (v, list, d) => (list.includes(v) ? v : d);
+    return {
+      pos: pick(p.pos, ['top-left', 'top-center', 'top-right', 'middle-center', 'bottom-left', 'bottom-center', 'bottom-right'], 'top-center'),
+      size: pick(p.size, ['s', 'm', 'l', 'xl'], 'm'),
+      design: pick(p.design, ['glass', 'solid', 'minimal', 'neon'], 'glass'),
+      color: /^#[0-9a-f]{6}$/i.test(p.color || '') ? p.color.toLowerCase() : '', // '' = follow the theme
+      tone: pick(p.tone, ['auto', 'dark', 'light'], 'auto'),
+      sound: p.sound !== false,
+      showText: p.showText !== false,
+      hideAfter: [0, 5, 10, 20, 60].includes(Number(p.hideAfter)) ? Number(p.hideAfter) : 0, // seconds; 0 = stay until clicked
+    };
+  }
+
+  setPopupPrefs(patch) {
+    this.cfg.popupPrefs = patch && patch.reset ? {} : { ...this.popupPrefs(), ...(patch || {}) };
+    this.cfg.popupPrefs = this.popupPrefs();
+    this.saveCfg();
+    this.ev('me', this.meView());
+  }
+
   setRecentEmoji(list) {
     this.cfg.recentEmoji = (Array.isArray(list) ? list : []).filter((e) => typeof e === 'string' && e.length <= 16).slice(0, 32);
     this.saveCfg();
@@ -952,7 +975,7 @@ class Messenger extends EventEmitter {
   meView() {
     const c = this.cfg;
     return { id: this.me.id, name: c.name, dept: c.dept, status: c.status, absenceMsg: c.absenceMsg, host: os.hostname(), hasLock: !!c.lock, hasBackupKey: !!c.backup, autoBackup: c.autoBackup !== false, backupDir: this.backupDir(), lastBackup: c.lastBackup || 0, avatar: c.avatar || '',
-      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false, appearance: this.appearance(), recentEmoji: c.recentEmoji || [] } };
+      config: { teamCode: c.teamCode, relayUrl: c.relayUrl, relayToken: c.relayToken, extraPeers: c.extraPeers, downloadDir: c.downloadDir, udpPort: c.udpPort, popup: c.popup !== false, askSave: c.askSave !== false, appearance: this.appearance(), recentEmoji: c.recentEmoji || [], popupPrefs: this.popupPrefs() } };
   }
 
   getState() {

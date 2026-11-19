@@ -928,6 +928,47 @@ function backupBox() {
     h('p', { class: 'hint' }, `With a key set, TeamLink also saves a backup by itself once a day in: ${S.me.backupDir}`));
 }
 
+// ---------------------------------------------------------------- popup settings (desktop app)
+function popupDialog() {
+  const p = { ...S.me.config.popupPrefs };
+  let timer;
+  const save = (patch) => {
+    Object.assign(p, patch); S.me.config.popupPrefs = { ...p };
+    rpc('setPopupPrefs', patch).then(() => { clearTimeout(timer); timer = setTimeout(() => desk && desk.testPopup(), 150); }).catch((e) => toast(e.message));
+    draw();
+  };
+  const POS = [['top-left', '↖'], ['top-center', '↑'], ['top-right', '↗'], [null], ['middle-center', '●'], [null], ['bottom-left', '↙'], ['bottom-center', '↓'], ['bottom-right', '↘']];
+  const grid = h('div', { class: 'posgrid' });
+  const sel = (key, options) => { const el = h('select', { onchange: () => save({ [key]: /^\d+$/.test(el.value) ? Number(el.value) : el.value }) }, options.map(([v, label]) => h('option', { value: v }, label))); return el; };
+  const size = sel('size', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large'], ['xl', 'Extra large']]);
+  const design = sel('design', [['glass', 'Liquid glass'], ['solid', 'Solid card'], ['minimal', 'Minimal pill'], ['neon', 'Neon']]);
+  const tone = sel('tone', [['auto', 'Same as my theme'], ['dark', 'Dark'], ['light', 'Light']]);
+  const hide = sel('hideAfter', [['0', 'Stay until I click it'], ['5', 'Hide after 5 seconds'], ['10', 'Hide after 10 seconds'], ['20', 'Hide after 20 seconds'], ['60', 'Hide after 1 minute']]);
+  const swatches = h('div', { class: 'swatches' });
+  const custom = h('input', { type: 'color', title: 'Any colour', onchange: () => save({ color: custom.value }) });
+  const sound = h('input', { type: 'checkbox', onchange: () => save({ sound: sound.checked }) });
+  const text = h('input', { type: 'checkbox', onchange: () => save({ showText: text.checked }) });
+  function draw() {
+    size.value = p.size; design.value = p.design; tone.value = p.tone; hide.value = String(p.hideAfter); sound.checked = p.sound; text.checked = p.showText;
+    custom.value = p.color || S.me.config.appearance.accent;
+    grid.replaceChildren(...POS.map(([id, arrow]) => (id ? h('button', { class: 'pos' + (p.pos === id ? ' on' : ''), type: 'button', title: id.replace('-', ' '), onclick: () => save({ pos: id }) }, arrow) : h('span'))));
+    const themeDot = h('button', { class: 'swatch theme-dot' + (!p.color ? ' on' : ''), type: 'button', title: 'Same as my theme', onclick: () => save({ color: '' }) }, 'A');
+    swatches.replaceChildren(themeDot, ...ACCENTS.map((c) => { const b = h('button', { class: 'swatch' + (c === p.color ? ' on' : ''), type: 'button', title: c, onclick: () => save({ color: c }) }); b.style.background = c; return b; }), custom);
+  }
+  draw();
+  modal('Popup settings', [
+    h('p', { class: 'hint' }, 'Every change shows a test popup on your screen.'),
+    h('label', null, 'Where on the screen'), grid,
+    ...field('Size', size), ...field('Design', design),
+    h('label', null, 'Colour'), swatches,
+    ...field('Light or dark', tone),
+    ...field('How long it stays', hide),
+    h('label', null, sound, ' Play a sound'),
+    h('label', null, text, ' Show the message text (off: only who sent it)'),
+  ], { label: 'Done', run: async () => {} },
+  h('button', { class: 'ghost', type: 'button', onclick: () => desk.testPopup() }, 'Show test popup'));
+}
+
 function openSettings() {
   const c = S.me.config;
   const team = h('input', { type: 'text', value: c.teamCode, maxLength: 100, placeholder: 'At least 8 characters, given to you by your team' });
@@ -955,6 +996,7 @@ function openSettings() {
     ...field('Save received files to', dl),
     desk && h('label', null, askSave, ' Ask where to save each file (off: save straight to the folder above)'),
     desk && h('label', null, popup, ' Show a popup on screen when a message arrives'),
+    desk && h('button', { class: 'ghost', type: 'button', onclick: popupDialog }, '🔔 Popup settings: place, size, colour, design…'),
     desk && h('label', null, autostart, ' Start TeamLink when I sign in to this computer'),
     desk && h('h3', null, 'Updates'),
     desk && updateRow(),

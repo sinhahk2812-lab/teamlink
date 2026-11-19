@@ -4,6 +4,8 @@ window.popup.onData((d) => {
   if (d.accent) root.style.setProperty('--accent', d.accent);
   root.classList.toggle('light', !!d.light);
   root.classList.toggle('still', d.motion === false);
+  root.style.zoom = d.scale && d.scale !== 1 ? String(d.scale) : '';
+  document.body.dataset.design = d.design || 'glass';
   document.getElementById('title').textContent = d.title;
   document.getElementById('body').textContent = d.body;
   document.getElementById('more').textContent = d.note ? d.note : d.count > 1 ? `${d.count} new messages · click to open` : 'Click to open and reply';

@@ -110,11 +110,12 @@ function onIncoming(d) {
   const conv = messenger.convView(messenger.store.conv(d.conv));
   const peer = messenger.peers.get(d.from);
   const who = (peer && peer.name) || 'Someone';
+  const prefs = messenger.popupPrefs();
   popupCount += 1;
-  popupData = { conv: d.conv, count: popupCount, body: (conv.last && conv.last.preview) || 'New message',
+  popupData = { conv: d.conv, count: popupCount, body: prefs.showText ? (conv.last && conv.last.preview) || 'New message' : 'New message',
     title: conv.type === 'dm' ? who : `${who} · ${conv.type === 'all' ? 'Everyone' : conv.name || 'Group'}` };
   showPopup();
-  shell.beep();
+  if (prefs.sound) shell.beep();
 }
 
 // The other person opened a sealed message you sent: tell the sender, like IP Messenger's "opened" notice.
@@ -122,18 +123,23 @@ function onOpened(d) {
   if (lookingAt(d.conv) || messenger.cfg.popup === false) return; // the window shows it itself
   const peer = messenger.peers.get(d.by);
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  popupData = { conv: d.conv, count: 1, title: `${(peer && peer.name) || 'Someone'} opened your message`, body: d.preview, note: `Opened at ${time} · click to open the chat` };
+  popupData = { conv: d.conv, count: 1, title: `${(peer && peer.name) || 'Someone'} opened your message`,
+    body: messenger.popupPrefs().showText ? d.preview : 'Sealed message', note: `Opened at ${time} · click to open the chat` };
   showPopup();
 }
 
-// The popup follows the user's theme: accent colour and light or dark glass.
+// Colours for the popup: the user's own choice from the popup settings, otherwise the app theme.
 function popupLook() {
-  const a = messenger.appearance();
-  const light = ['rose', 'lavender', 'sand'].includes(a.preset) || (a.preset === 'classic' && (a.mode === 'light' || (a.mode === 'system' && !nativeTheme.shouldUseDarkColors)));
-  return { accent: a.accent, light, motion: a.motion };
+  const a = messenger.appearance(), p = messenger.popupPrefs();
+  const themeLight = ['rose', 'lavender', 'sand'].includes(a.preset) || (a.preset === 'classic' && (a.mode === 'light' || (a.mode === 'system' && !nativeTheme.shouldUseDarkColors)));
+  return { accent: p.color || a.accent, light: p.tone === 'auto' ? themeLight : p.tone === 'light', motion: a.motion, design: p.design };
 }
 
+const POPUP_SCALE = { s: 0.8, m: 1, l: 1.22, xl: 1.45 };
+let popupHideTimer = null;
+
 function showPopup() {
+  const prefs = messenger.popupPrefs();
   Object.assign(popupData, popupLook());
   if (!popup || popup.isDestroyed()) {
     popupReady = false;
@@ -146,29 +152,47 @@ function showPopup() {
     popup.webContents.on('will-navigate', (e) => e.preventDefault());
     popup.loadFile(path.join(__dirname, 'popup.html'));
   }
-  const area = screen.getPrimaryDisplay().workArea;
-  // Top centre of the screen. A popup that is not showing yet drops in from above the screen edge;
-  // one that is already showing just refreshes its text (the page plays a short pulse).
-  const x = Math.round(area.x + (area.width - POPUP_W) / 2), restY = area.y + 10;
+  // Size and place come from the popup settings. The page is zoomed with the window so everything scales together.
+  const scale = POPUP_SCALE[prefs.size] || 1, W = Math.round(POPUP_W * scale), H = Math.round(POPUP_H * scale);
+  popupData.scale = scale;
+  const area = screen.getPrimaryDisplay().workArea, [vert, horiz] = prefs.pos.split('-'), EDGE = 6;
+  const x = horiz === 'left' ? area.x + EDGE : horiz === 'right' ? area.x + area.width - W - EDGE : Math.round(area.x + (area.width - W) / 2);
+  const restY = vert === 'top' ? area.y + EDGE : vert === 'bottom' ? area.y + area.height - H - EDGE : Math.round(area.y + (area.height - H) / 2);
+  // It slides in from the nearest screen edge (from just above its place when it sits in the middle).
+  const fromY = vert === 'top' ? area.y - H : vert === 'bottom' ? area.y + area.height : restY - 60;
   if (popupReady) popup.webContents.send('popupData', popupData);
-  if (popup.isVisible() && !popupAnim) return popup.setBounds({ x, y: restY, width: POPUP_W, height: POPUP_H });
+  clearTimeout(popupHideTimer);
+  if (prefs.hideAfter) popupHideTimer = setTimeout(hidePopup, prefs.hideAfter * 1000);
+  // A popup that is already showing in the same place just refreshes its text (the page plays a short pulse).
+  const now = popup.getBounds();
+  if (popup.isVisible() && !popupAnim && now.x === x && now.y === restY && now.width === W) return;
   clearInterval(popupAnim);
-  const fromY = area.y - POPUP_H, started = Date.now(), DURATION = 380;
-  popup.setBounds({ x, y: fromY, width: POPUP_W, height: POPUP_H });
+  const started = Date.now(), DURATION = 380;
+  popup.setBounds({ x, y: fromY, width: W, height: H });
   try { popup.setOpacity(0); } catch {}
   popup.showInactive(); // never steals the keyboard from what the user is typing in
   popupAnim = setInterval(() => {
     if (!popup || popup.isDestroyed()) { clearInterval(popupAnim); popupAnim = null; return; }
     const t = Math.min(1, (Date.now() - started) / DURATION);
     const c1 = 1.70158, c3 = c1 + 1, ease = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); // ease-out with a small overshoot
-    popup.setBounds({ x, y: Math.round(fromY + (restY - fromY) * ease), width: POPUP_W, height: POPUP_H });
+    popup.setBounds({ x, y: Math.round(fromY + (restY - fromY) * ease), width: W, height: H });
     try { popup.setOpacity(Math.min(1, t * 1.6)); } catch {}
     if (t >= 1) { clearInterval(popupAnim); popupAnim = null; }
   }, 12);
 }
 
+// "Show a test popup" in the popup settings.
+ipcMain.handle('testPopup', (e) => {
+  if (!win || e.sender !== win.webContents) return;
+  popupCount = 0;
+  popupData = { conv: null, count: 1, title: 'Asha Verma', body: 'This is how a new message will pop up on your screen.', note: 'Test popup · click to close' };
+  if (popup && !popup.isDestroyed()) popup.hide(); // replay the entrance with the new settings
+  showPopup();
+});
+
 function hidePopup() {
   popupCount = 0;
+  clearTimeout(popupHideTimer);
   clearInterval(popupAnim); popupAnim = null;
   if (popup && !popup.isDestroyed()) popup.hide();
 }
@@ -180,6 +204,7 @@ ipcMain.on('popupOpen', (e) => {
   if (!fromPopup(e) || !popupData) return;
   const conv = popupData.conv;
   hidePopup();
+  if (!conv) return; // the test popup
   showWindow();
   win.webContents.send('openConv', conv);
 });

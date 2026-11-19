@@ -153,6 +153,7 @@ function startServer(messenger, { port = 0, token } = {}) {
     leaveGroup: (p) => messenger.leaveGroup(String(p.conv)),
     deleteConversation: (p) => messenger.deleteConversation(String(p.conv)),
     removeAvatar: () => messenger.setAvatar(null),
+    setPopupPrefs: (p) => messenger.setPopupPrefs(p),
     setRecentEmoji: (p) => messenger.setRecentEmoji(p.list),
     setAppearance: (p) => messenger.setAppearance(p),
     setProfile: (p) => messenger.setProfile(p),
