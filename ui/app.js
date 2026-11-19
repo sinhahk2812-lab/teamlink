@@ -216,6 +216,7 @@ function appearanceDialog() {
   draw();
   modal('Appearance', [
     h('p', { class: 'hint' }, 'Changes apply straight away and only on this computer.'),
+    desk && h('button', { class: 'ghost', type: 'button', onclick: popupDialog }, '🔔 Message popup: place, size, colour, design…'),
     h('label', null, 'Theme'), themes,
     ...field('Light or dark (Classic theme only)', mode),
     ...field('Style', look),
