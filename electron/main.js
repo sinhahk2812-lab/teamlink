@@ -74,6 +74,7 @@ async function start() {
   } catch {}
 
   messenger.on('event', (name, d) => { if (name === 'incoming') onIncoming(d); else if (name === 'opened') onOpened(d); });
+  messenger.on('event', (name, d) => { if (name === 'intakeAlert') onIntakeAlert(d); }); // WHATSAPP-INTAKE
   win.on('focus', () => { win.flashFrame(false); hidePopup(); });
   win.on('hide', installIfReady);
   setupUpdates();
@@ -103,6 +104,22 @@ function lookingAt(conv) {
 }
 ipcMain.on('activeConv', (e, conv) => { if (win && e.sender === win.webContents) activeConv = conv ? String(conv) : null; });
 
+// Who the popup is about: their profile photo, or their initials on their colour when they have none.
+const FACE_COLORS = ['#0d9488', '#2563eb', '#7c3aed', '#db2777', '#ea580c', '#059669', '#0891b2', '#4f46e5', '#b45309', '#be123c'];
+function popupFace(peerId, name) {
+  let n = 0;
+  for (const c of String(peerId)) n = (n * 31 + c.charCodeAt(0)) >>> 0;
+  const face = { initials: String(name || '?').trim().split(/\s+/).slice(0, 2).map((w) => [...w][0] || '').join('').toUpperCase() || '?', faceColor: FACE_COLORS[n % FACE_COLORS.length], avatar: '' };
+  try {
+    const peer = messenger.peers.get(peerId), file = messenger.avatarPath(peerId);
+    if (peer && peer.avatar && fs.existsSync(file)) {
+      const buf = fs.readFileSync(file), kind = Messenger.imageKind(buf);
+      if (kind && buf.length < 300 * 1024) face.avatar = `data:${kind};base64,${buf.toString('base64')}`;
+    }
+  } catch {}
+  return face;
+}
+
 function onIncoming(d) {
   if (lookingAt(d.conv)) return; // that chat is open in front of the user right now
   win.flashFrame(true);
@@ -113,7 +130,7 @@ function onIncoming(d) {
   const prefs = messenger.popupPrefs();
   popupCount += 1;
   popupData = { conv: d.conv, count: popupCount, body: prefs.showText ? (conv.last && conv.last.preview) || 'New message' : 'New message',
-    title: conv.type === 'dm' ? who : `${who} · ${conv.type === 'all' ? 'Everyone' : conv.name || 'Group'}` };
+    title: conv.type === 'dm' ? who : `${who} · ${conv.type === 'all' ? 'Everyone' : conv.name || 'Group'}`, ...popupFace(d.from, who) };
   showPopup();
   if (prefs.sound) shell.beep();
 }
@@ -124,9 +141,19 @@ function onOpened(d) {
   const peer = messenger.peers.get(d.by);
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   popupData = { conv: d.conv, count: 1, title: `${(peer && peer.name) || 'Someone'} opened your message`,
-    body: messenger.popupPrefs().showText ? d.preview : 'Sealed message', note: `Opened at ${time} · click to open the chat` };
+    body: messenger.popupPrefs().showText ? d.preview : 'Sealed message', note: `Opened at ${time} · click to open the chat`, ...popupFace(d.by, peer && peer.name) };
   showPopup();
 }
+
+// WHATSAPP-INTAKE: begin (popup for a high-priority WhatsApp item or one newly assigned to me; clicking opens the inbox)
+function onIntakeAlert(d) {
+  if (messenger.cfg.popup === false) return;
+  popupData = { conv: 'intake:' + d.id, count: 1, title: d.reason === 'assigned' ? 'Assigned to you' : `High priority · ${d.sender}`,
+    body: messenger.popupPrefs().showText ? d.title : 'WhatsApp item', note: `${d.chat} · click to open the WhatsApp Inbox` };
+  showPopup();
+  if (messenger.popupPrefs().sound) shell.beep();
+}
+// WHATSAPP-INTAKE: end
 
 // Colours for the popup: the user's own choice from the popup settings, otherwise the app theme.
 function popupLook() {
@@ -185,7 +212,7 @@ function showPopup() {
 ipcMain.handle('testPopup', (e) => {
   if (!win || e.sender !== win.webContents) return;
   popupCount = 0;
-  popupData = { conv: null, count: 1, title: 'Asha Verma', body: 'This is how a new message will pop up on your screen.', note: 'Test popup · click to close' };
+  popupData = { conv: null, count: 1, title: 'Asha Verma', body: 'This is how a new message will pop up on your screen.', note: 'Test popup · click to close', ...popupFace(messenger.me.id, messenger.cfg.name), ...(() => { try { const f = messenger.avatarPath(messenger.me.id); if (messenger.cfg.avatar && fs.existsSync(f)) { const b = fs.readFileSync(f); return { avatar: `data:${Messenger.imageKind(b)};base64,${b.toString('base64')}` }; } } catch {} return {}; })() };
   if (popup && !popup.isDestroyed()) popup.hide(); // replay the entrance with the new settings
   showPopup();
 });

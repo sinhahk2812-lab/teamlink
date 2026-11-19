@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'self'">
 <title>TeamLink message</title>
 <style>
   :root { --accent: #0d9488; --ink: #f8fafc; --soft: rgba(248,250,252,.78); --tint: 18, 24, 38; --edge: rgba(255,255,255,.34); }
@@ -30,6 +30,14 @@
     background: linear-gradient(145deg, rgba(255,255,255,.34), rgba(255,255,255,.08)); border: 1px solid rgba(255,255,255,.4);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.6), 0 6px 16px rgba(0,0,0,.2); }
   img { width: 44px; height: 44px; }
+  /* the sender's photo or initials fill the badge as a circle */
+  .badge.face { border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,.55); }
+  .badge.face img { width: 100%; height: 100%; object-fit: cover; filter: none !important; }
+  .badge.face #initials { color: #fff; font-weight: 700; font-size: 22px; letter-spacing: .5px; }
+  #initials { display: none; }
+  .badge.letters img { display: none; }
+  .badge.letters #initials { display: block; }
+  body[data-design="minimal"] .badge.face #initials { font-size: 16px; }
   .text { position: relative; flex: 1; min-width: 0; }
   #title { font-weight: 700; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 30px; }
   #body { color: var(--soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; margin-top: 3px; }
@@ -65,7 +73,7 @@
 </head>
 <body>
   <div class="card" id="card">
-    <div class="badge"><img id="icon" src="icon.png" alt=""></div>
+    <div class="badge" id="badge"><img id="icon" src="icon.png" alt=""><span id="initials"></span></div>
     <div class="text"><div id="title"></div><div id="body"></div><div id="more"></div></div>
     <button id="close" title="Dismiss">×</button>
   </div>

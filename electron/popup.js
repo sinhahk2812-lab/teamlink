@@ -6,6 +6,14 @@ window.popup.onData((d) => {
   root.classList.toggle('still', d.motion === false);
   root.style.zoom = d.scale && d.scale !== 1 ? String(d.scale) : '';
   document.body.dataset.design = d.design || 'glass';
+  // sender's photo, else their initials, else the app logo
+  const badge = document.getElementById('badge'), icon = document.getElementById('icon');
+  const hasPhoto = typeof d.avatar === 'string' && d.avatar.startsWith('data:image/');
+  badge.classList.toggle('face', hasPhoto || !!d.initials);
+  badge.classList.toggle('letters', !hasPhoto && !!d.initials);
+  icon.src = hasPhoto ? d.avatar : 'icon.png';
+  document.getElementById('initials').textContent = d.initials || '';
+  badge.style.background = !hasPhoto && d.initials ? d.faceColor || '' : '';
   document.getElementById('title').textContent = d.title;
   document.getElementById('body').textContent = d.body;
   document.getElementById('more').textContent = d.note ? d.note : d.count > 1 ? `${d.count} new messages · click to open` : 'Click to open and reply';

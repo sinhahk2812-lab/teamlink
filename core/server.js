@@ -131,7 +131,22 @@ function startServer(messenger, { port = 0, token } = {}) {
     });
   });
 
+  const intake = messenger.intake; // WHATSAPP-INTAKE
   const methods = {
+    // WHATSAPP-INTAKE: begin
+    intakeState: () => intake.state(),
+    intakeSetEnabled: (p) => intake.setEnabled(!!p.on),
+    intakeNewKey: () => intake.newKey(),
+    intakeRevokeKey: () => intake.revokeKey(),
+    intakeList: (p) => intake.list(p),
+    intakeGet: (p) => intake.get(p),
+    intakeUpdate: (p) => intake.update(p),
+    intakeSeen: (p) => intake.markSeen(p),
+    intakeComment: (p) => intake.comment(p),
+    intakeClaimAdmin: () => intake.claimAdmin(),
+    intakeUpdateTeam: (p) => intake.updateTeam(p),
+    intakeRevokeFor: (p) => intake.revokeFor(p),
+    // WHATSAPP-INTAKE: end
     getState: () => messenger.getState(),
     getMessages: (p) => messenger.getMessages(p),
     send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, locked: p.locked, replyTo: p.replyTo, sub: p.sub || undefined, paths: (p.paths || []).map(String) }),

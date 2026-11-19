@@ -11,6 +11,7 @@ const C = require('./crypto');
 const { Store } = require('./store');
 const { Lan } = require('./lan');
 const { RelayClient } = require('./relay-client');
+const { Intake } = require('./intake'); // WHATSAPP-INTAKE
 
 const HELLO_EVERY = 20000;
 const LAN_STALE = 70000;
@@ -61,6 +62,7 @@ class Messenger extends EventEmitter {
     this.saveCfg();
     this.me = this.cfg.identity;
     this.store = new Store(dataDir);
+    this.intake = new Intake(this); // WHATSAPP-INTAKE
     this.peers = new Map();
     for (const p of this.store.peers()) this.peers.set(p.id, { id: p.id, pub: p.pub, name: p.name, dept: p.dept, host: p.host, lastSeen: p.last_seen, avatar: p.avatar || '', status: 'online', absenceMsg: '', lan: null, relay: false });
     if (!this.store.conv('all')) this.store.saveConv({ id: 'all', type: 'all', name: 'Everyone', members: [], updated: 0 });
@@ -80,6 +82,7 @@ class Messenger extends EventEmitter {
   // ------------------------------------------------------------------ lifecycle
   async start() {
     await this.startNet();
+    await this.intake.start(); // WHATSAPP-INTAKE
     this.timers.push(setInterval(() => this.tick(), 10000));
     this.timers.push(setInterval(() => this.hello('hello'), HELLO_EVERY));
     this.timers.push(setInterval(() => this.autoBackup().catch(() => {}), 3600 * 1000));
@@ -132,6 +135,7 @@ class Messenger extends EventEmitter {
 
   async stop() {
     for (const t of this.timers) clearInterval(t);
+    this.intake.stop(); // WHATSAPP-INTAKE
     await this.stopNet();
     this.store.close();
   }
@@ -329,6 +333,7 @@ class Messenger extends EventEmitter {
     try {
       const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub }[f.t];
       if (handler) handler.call(this, from, f);
+      else this.intake.onFrame(from, f); // WHATSAPP-INTAKE
     } catch (e) {
       this.ev('warn', 'frame error: ' + e.message);
     }
@@ -979,8 +984,10 @@ class Messenger extends EventEmitter {
   }
 
   getState() {
-    return { me: this.meView(), net: this.netState(), peers: [...this.peers.values()].map((p) => this.peerView(p)),
+    const state = { me: this.meView(), net: this.netState(), peers: [...this.peers.values()].map((p) => this.peerView(p)),
       convs: this.store.convs().map((c) => this.convView(c)) };
+    state.intakeUnread = this.intake.unread(); // WHATSAPP-INTAKE
+    return state;
   }
 
   getMessages({ conv, before, limit, sub }) {

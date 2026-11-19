@@ -210,6 +210,89 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await until('queued ack', () => msgs(A, 'dm:' + B.me.id).find((m) => m.id === q.id).delivered === 1);
   ok('message sent while the peer was offline is delivered when it returns');
 
+  // WHATSAPP-INTAKE: begin (real HTTP requests against A's and B's endpoints)
+  const post = async (port, key, body, raw) => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/intake/whatsapp`, { method: 'POST', headers: { 'content-type': 'application/json', ...(key ? { authorization: 'Bearer ' + key } : {}) }, body: raw || JSON.stringify(body) });
+    return { status: r.status, body: await r.json() };
+  };
+  const ipA = base + 20, ipB = base + 21;
+  A.cfg.intake = { port: ipA, host: '127.0.0.1' }; B.cfg.intake = { port: ipB, host: '127.0.0.1' };
+  await A.intake.setEnabled(true); await B.intake.setEnabled(true);
+  const keyA = A.intake.newKey().key, keyB = B.intake.newKey().key;
+  assert.ok(/^tlk_/.test(keyA) && !JSON.stringify(A.cfg).includes(keyA) && A.cfg.intake.keyHash.length === 64);
+  const wa = (over) => ({ source_id: 'm-1001', title: 'Review reel v3', type: 'review', from: 'Chinmay', chat: "Axit's Creatives", time: '2026-11-19T14:30:00+05:30',
+    text: 'Bhai reel v3 dekh lo, aaj shaam tak feedback chahiye', links: ['https://www.instagram.com/reel/abc', 'javascript:alert(1)'], priority: 'high', ...over });
+  assert.equal((await post(ipA, null, { items: [wa()] })).status, 401);
+  assert.equal((await post(ipA, 'tlk_wrong', { items: [wa()] })).status, 401);
+  assert.equal((await post(ipA, keyA, null, '{not json')).status, 400);
+  assert.equal((await post(ipA, keyA, { items: [] })).status, 400);
+  const badType = await post(ipA, keyA, { items: [wa({ type: 'meme' })] });
+  assert.ok(badType.status === 400 && badType.body.field === 'type' && badType.body.index === 0);
+  assert.equal((await post(ipA, keyA, { items: [wa({ time: '19 Nov 2:30pm' })] })).body.field, 'time');
+  assert.equal(A.intake.list().items.length, 0);
+  ok('intake API rejects missing/wrong keys (401) and bad payloads (400) without storing anything');
+
+  await until('team admin + rules', () => { try { A.intake.claimAdmin(); return true; } catch { return true; } });
+  A.intake.updateTeam({ rules: [{ kind: 'sender', match: 'chinmay', user: C.me.id }, { kind: 'chat', match: "Axit's Creatives", project: 'Creatives' }] });
+  await until('rules reach B', () => B.intake.team().rules.length === 2 && B.intake.team().admins[0] === A.me.id);
+  assert.throws(() => B.intake.updateTeam({ enabled: false }), /Only a team admin/);
+  const alerts = []; C.on('event', (e, d) => { if (e === 'intakeAlert') alerts.push(d); });
+  const first = await post(ipA, keyA, { items: [wa(), wa({ source_id: 'm-1002', title: 'New banner', type: 'new_task', from: 'RS Mahima', priority: 'normal' })] });
+  assert.deepEqual([first.status, first.body.created, first.body.skipped, first.body.ids.length], [200, 2, 0, 2]);
+  const again = await post(ipA, keyA, { items: [wa()] });
+  assert.deepEqual([again.body.created, again.body.skipped, again.body.ids[0]], [0, 1, first.body.ids[0]]);
+  const idA = first.body.ids[0];
+  await until('item synced to B and C', () => B.intake.item(idA) && C.intake.item(idA));
+  // B's agent reports the same group message: still one item, now with two reporters, on every computer
+  const dupe = await post(ipB, keyB, { items: [wa()] });
+  assert.deepEqual([dupe.body.created, dupe.body.skipped, dupe.body.ids[0]], [0, 1, idA]);
+  await until('both reporters everywhere', () => [A, B, C].every((m) => m.intake.item(idA).reporters.length === 2));
+  assert.equal(A.intake.list().items.length, 2);
+  const itA = A.intake.get({ id: idA });
+  assert.deepEqual([itA.assignee, itA.project, itA.links.length, itA.priority], [C.me.id, 'Creatives', 1, 'high']); // mapped sender -> Chen, chat -> project, unsafe link dropped
+  assert.equal(A.intake.item(first.body.ids[1]).assignee, A.me.id); // unmapped sender -> the reporter
+  await until('alert for the assignee', () => alerts.some((a) => a.id === idA));
+  ok('intake creates once across members, records both reporters, maps sender/chat, and alerts the assignee');
+
+  // any member's key works on any running endpoint (one machine can serve the team later)
+  const viaA = await post(ipA, keyB, { items: [wa({ source_id: 'm-2001', title: 'Deadline Friday', type: 'deadline' })] });
+  assert.equal(viaA.body.created, 1);
+  assert.deepEqual(A.intake.item(viaA.body.ids[0]).reporters, [B.me.id]);
+  // per-user seen, shared status / assignee / due / comments
+  B.intake.markSeen({ id: idA });
+  assert.ok(B.intake.item(idA).seen && !A.intake.item(idA).seen && !C.intake.item(idA).seen);
+  C.intake.update({ id: idA, status: 'in_progress', due: '2026-11-21T18:00:00+05:30' });
+  await until('status sync', () => A.intake.item(idA).status === 'in_progress' && B.intake.item(idA).status === 'in_progress');
+  B.intake.update({ id: idA, assignee: B.me.id });
+  await until('reassign sync', () => A.intake.item(idA).assignee === B.me.id && C.intake.item(idA).assignee === B.me.id);
+  assert.equal(A.intake.item(idA).due, Date.parse('2026-11-21T18:00:00+05:30'));
+  C.intake.comment({ id: idA, text: 'Feedback bhej diya' });
+  await until('comment sync', () => A.intake.get({ id: idA }).thread.length === 1 && B.intake.get({ id: idA }).thread[0].author === C.me.id);
+  assert.equal(B.intake.list({ view: 'mine' }).items.some((x) => x.id === idA), true);
+  assert.equal(A.intake.list({ q: 'banner' }).items.length, 1);
+  assert.equal(A.intake.list({ type: 'deadline', status: 'open' }).items.length, 1);
+  ok('per-user seen; status, assignee, due date and comments sync; filters and search work');
+
+  // admin sees members' intakes, can revoke a key and switch the team off; a member can switch theirs off
+  await until('admin sees B', () => A.intake.state().members.some((x) => x.user === B.me.id && x.hasKey && x.last > 0));
+  A.intake.revokeFor({ user: B.me.id });
+  await until('B key revoked', () => !B.intake.conf().keyHash);
+  assert.equal((await post(ipB, keyB, { items: [wa({ source_id: 'm-3001' })] })).status, 401);
+  assert.equal((await post(ipA, keyB, { items: [wa({ source_id: 'm-3001' })] })).status, 401);
+  const keyA2 = A.intake.newKey().key;
+  assert.equal((await post(ipA, keyA, { items: [wa({ source_id: 'm-3002' })] })).status, 401); // regenerating replaces the old key
+  A.intake.updateTeam({ enabled: false });
+  assert.equal((await post(ipA, keyA2, { items: [wa({ source_id: 'm-3002' })] })).status, 403);
+  A.intake.updateTeam({ enabled: true });
+  let limited = 0;
+  for (let i = 0; i < 70; i++) if ((await post(ipA, keyA2, { items: [wa()] })).status === 429) limited++;
+  assert.ok(limited >= 5 && limited <= 30, 'rate limit hits: ' + limited); // 60 per minute per key, some already used above
+  assert.ok(A.intake.state().log.some((l) => l.status === 429) && A.store.get('SELECT COUNT(*) n FROM intake_log WHERE status=401').n >= 2);
+  await A.intake.setEnabled(false);
+  await assert.rejects(post(ipA, keyA2, { items: [wa()] }));
+  ok('admin can revoke keys and disable team intake; regenerate, rate limit (429), logging and the off switch work');
+  // WHATSAPP-INTAKE: end
+
   // backup with an easy key, then restore into an empty data folder
   assert.throws(() => A.setBackupKey({ key: 'abc' }), /at least 4/);
   await assert.rejects(A.createBackup(path.join(tmp, 'x.tlbackup')), /Set a backup key/);

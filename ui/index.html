@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TeamLink</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="intake.css"><!-- WHATSAPP-INTAKE -->
 </head>
 <body>
 <div id="app">
@@ -23,6 +24,7 @@
     <div id="banner" hidden></div>
     <div id="updateBanner" hidden></div>
     <nav id="lists">
+      <div id="inboxNav" hidden><button id="inboxBtn" class="item"><span class="avatar">📥</span><span class="body"><span class="name">WhatsApp Inbox</span></span><span id="inboxBadge" class="badge" hidden></span></button></div><!-- WHATSAPP-INTAKE -->
       <section id="chatSection"><h3>Chats</h3><ul id="convList"></ul></section>
       <section><h3 id="membersTitle">Members</h3><ul id="peerList"></ul></section>
       <section id="resultSection" hidden><h3>Search results</h3><ul id="resultList"></ul></section>
@@ -68,6 +70,7 @@
         <input id="fileInput" type="file" multiple hidden>
       </footer>
     </div>
+    <div id="inbox" hidden></div><!-- WHATSAPP-INTAKE -->
   </main>
 </div>
 
@@ -76,5 +79,6 @@
 <div id="toast" hidden></div>
 <script src="emoji.js"></script>
 <script src="app.js"></script>
+<script src="intake.js"></script><!-- WHATSAPP-INTAKE -->
 </body>
 </html>

@@ -64,6 +64,7 @@ function connect() {
     S.peers = new Map(st.peers.map((p) => [p.id, p]));
     S.convs = new Map(st.convs.map((c) => [c.id, c]));
     renderAll();
+    if (typeof intakeInit === 'function') intakeInit(st); // WHATSAPP-INTAKE
     if (S.active) openConv(S.active);
     else if (!S.me.config.teamCode && $('modal').hidden) openSettings(); // first run: ask for the team code straight away
   };
@@ -100,6 +101,7 @@ function onEvent(event, d) {
   else if (event === 'net') { S.net = d; renderNet(); }
   else if (event === 'message') onMessage(d);
   else if (event === 'file') onFile(d);
+  else if ((event === 'intake' || event === 'intakeAlert') && typeof intakeEvent === 'function') intakeEvent(event, d); // WHATSAPP-INTAKE
   else if (event === 'incoming') { pingAt.set(d.conv, Date.now()); renderSide(); notify(d); }
   else if (event === 'opened') toast(`${peerName(d.by)} opened your sealed message`);
 }
@@ -320,6 +322,8 @@ function clearSearch() { $('search').value = ''; S.results = null; renderSide();
 
 // ---------------------------------------------------------------- chat
 async function openConv(id, focusMsg, sub) {
+  if (String(id).startsWith('intake:')) return typeof intakeOpen === 'function' ? intakeOpen(id.slice(7)) : undefined; // WHATSAPP-INTAKE: a popup for an inbox item
+  if (typeof intakeClose === 'function') intakeClose(); // WHATSAPP-INTAKE
   if (id.startsWith('dm:') && !S.convs.has(id)) S.convs.set(id, { id, type: 'dm', members: [], unread: 0, last: null });
   const changed = S.active !== id;
   S.active = id;
@@ -990,6 +994,7 @@ function openSettings() {
     ...field('Relay token', token),
     h('h3', null, 'Network'),
     ...field('Extra addresses to search', extra, 'One IP or broadcast address per line, for other subnets or VPNs where automatic discovery does not reach.'),
+    typeof intakeSettings === 'function' && h('button', { class: 'ghost', type: 'button', onclick: intakeSettings }, '📥 WhatsApp Intake: my URL, API key, team mapping…'), // WHATSAPP-INTAKE
     h('h3', null, 'Backup and restore'),
     backupBox(),
     h('h3', null, 'Files'),
