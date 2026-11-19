@@ -1,6 +1,6 @@
 {
   "name": "teamlink",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "description": "Serverless LAN messenger for teams, with optional relay for remote members",
   "main": "electron/main.js",
   "license": "MIT",

@@ -234,8 +234,11 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await A.intake.setEnabled(true); await B.intake.setEnabled(true);
   const keyA = A.intake.newKey().key, keyB = B.intake.newKey().key;
   assert.ok(/^tlk_/.test(keyA) && !JSON.stringify(A.cfg).includes(keyA) && A.cfg.intake.keyHash.length === 64);
-  const wa = (over) => ({ source_id: 'm-1001', title: 'Review reel v3', type: 'review', from: 'Chinmay', chat: "Axit's Creatives", time: '2026-11-19T14:30:00+05:30',
+  let waN = 0;
+  const wa = (over) => ({ source_id: 'm-' + (++waN), title: 'Review reel v3', type: 'review', from: 'Client Rohan', chat: "Axit's Creatives", time: '2026-11-19T14:30:00+05:30',
     text: 'Bhai reel v3 dekh lo, aaj shaam tak feedback chahiye', links: ['https://www.instagram.com/reel/abc', 'javascript:alert(1)'], priority: 'high', ...over });
+  const has = (m, id) => !!m.intake.item(id);
+  const settle = () => sleep(350); // long enough for a frame that should NOT arrive to have arrived
   assert.equal((await post(ipA, null, { items: [wa()] })).status, 401);
   assert.equal((await post(ipA, 'tlk_wrong', { items: [wa()] })).status, 401);
   assert.equal((await post(ipA, keyA, null, '{not json')).status, 400);
@@ -246,61 +249,139 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   assert.equal(A.intake.list().items.length, 0);
   ok('intake API rejects missing/wrong keys (401) and bad payloads (400) without storing anything');
 
-  await until('team admin + rules', () => { try { A.intake.claimAdmin(); return true; } catch { return true; } });
-  A.intake.updateTeam({ rules: [{ kind: 'sender', match: 'chinmay', user: C.me.id }, { kind: 'chat', match: "Axit's Creatives", project: 'Creatives' }] });
-  await until('rules reach B', () => B.intake.team().rules.length === 2 && B.intake.team().admins[0] === A.me.id);
-  assert.throws(() => B.intake.updateTeam({ enabled: false }), /Only a team admin/);
-  const alerts = []; C.on('event', (e, d) => { if (e === 'intakeAlert') alerts.push(d); });
-  const first = await post(ipA, keyA, { items: [wa(), wa({ source_id: 'm-1002', title: 'New banner', type: 'new_task', from: 'RS Mahima', priority: 'normal' })] });
-  assert.deepEqual([first.status, first.body.created, first.body.skipped, first.body.ids.length], [200, 2, 0, 2]);
-  const again = await post(ipA, keyA, { items: [wa()] });
-  assert.deepEqual([again.body.created, again.body.skipped, again.body.ids[0]], [0, 1, first.body.ids[0]]);
-  const idA = first.body.ids[0];
-  await until('item synced to B and C', () => B.intake.item(idA) && C.intake.item(idA));
-  // B's agent reports the same group message: still one item, now with two reporters, on every computer
-  const dupe = await post(ipB, keyB, { items: [wa()] });
-  assert.deepEqual([dupe.body.created, dupe.body.skipped, dupe.body.ids[0]], [0, 1, idA]);
-  await until('both reporters everywhere', () => [A, B, C].every((m) => m.intake.item(idA).reporters.length === 2));
-  assert.equal(A.intake.list().items.length, 2);
-  const itA = A.intake.get({ id: idA });
-  assert.deepEqual([itA.assignee, itA.project, itA.links.length, itA.priority], [C.me.id, 'Creatives', 1, 'high']); // mapped sender -> Chen, chat -> project, unsafe link dropped
-  assert.equal(A.intake.item(first.body.ids[1]).assignee, A.me.id); // unmapped sender -> the reporter
-  await until('alert for the assignee', () => alerts.some((a) => a.id === idA));
-  ok('intake creates once across members, records both reporters, maps sender/chat, and alerts the assignee');
+  // 1. No rule: the item is private. Only A (the reporter) has it; same API contract as before.
+  const p1 = await post(ipA, keyA, { items: [wa({ source_id: 'priv-1' }), wa({ source_id: 'priv-2', title: 'New banner', type: 'new_task', priority: 'normal' })] });
+  assert.deepEqual([p1.status, p1.body.created, p1.body.skipped, p1.body.ids.length], [200, 2, 0, 2]);
+  const dupe = await post(ipA, keyA, { items: [wa({ source_id: 'priv-1' })] });
+  assert.deepEqual([dupe.body.created, dupe.body.skipped, dupe.body.ids[0]], [0, 1, p1.body.ids[0]]);
+  const id1 = p1.body.ids[0];
+  await settle();
+  assert.ok(has(A, id1) && !has(B, id1) && !has(C, id1));
+  assert.ok(A.intake.list({ view: 'mine' }).items.some((x) => x.id === id1) && B.intake.list().items.length === 0 && C.intake.list().items.length === 0);
+  assert.deepEqual([A.intake.item(id1).assignee, A.intake.audience(A.intake.item(id1))], [A.me.id, [A.me.id]]);
+  assert.equal(A.intake.item(id1).links.length, 1); // the javascript: link was dropped
+  ok('privacy: an item with no rule stays on the reporter\'s computer only (B and C get nothing); API contract unchanged');
 
-  // any member's key works on any running endpoint (one machine can serve the team later)
+  // 2. Assigning to B shares it with B and nobody else; comments go only to A and B.
+  const alertsB = []; B.on('event', (e, d) => { if (e === 'intakeAlert') alertsB.push(d); });
+  A.intake.comment({ id: id1, text: 'note written before B was involved' });
+  A.intake.update({ id: id1, assignee: B.me.id });
+  await until('B receives the assigned item with its history', () => has(B, id1) && B.intake.get({ id: id1 }).thread.length === 1);
+  assert.equal(B.intake.get({ id: id1 }).thread[0].author, A.me.id);
+  B.intake.comment({ id: id1, text: 'B working on it' });
+  await until('comment reaches A', () => A.intake.get({ id: id1 }).thread.length === 2);
+  B.intake.update({ id: id1, status: 'in_progress', due: '2026-11-21T18:00:00+05:30' });
+  await until('status reaches A', () => A.intake.item(id1).status === 'in_progress' && A.intake.item(id1).due === Date.parse('2026-11-21T18:00:00+05:30'));
+  await settle();
+  assert.ok(!has(C, id1) && C.store.get('SELECT COUNT(*) n FROM intake_comments').n === 0);
+  assert.ok(alertsB.some((a) => a.id === id1 && a.reason === 'assigned'));
+  B.intake.markSeen({ id: id1 });
+  assert.ok(B.intake.item(id1).seen); // "seen" is per user and never sent
+  ok('privacy: assigning to B shares the item, its comments and status with B only; C still has nothing');
+
+  // 3. Reassigning B -> C: B's copy is deleted, C gets the item with the comments so far.
+  A.intake.update({ id: id1, assignee: C.me.id });
+  await until('C has it, B lost it', () => has(C, id1) && !has(B, id1) && C.intake.get({ id: id1 }).thread.length === 2);
+  assert.equal(B.store.get('SELECT COUNT(*) n FROM intake_comments').n, 0);
+  ok('privacy: reassigning removes the item from the previous assignee and gives it to the new one');
+
+  // 4. "Share with...": explicit, per person; "Shared with me" view; unsharing deletes the copy.
+  const id2 = p1.body.ids[1];
+  A.intake.share({ id: id2, users: [B.me.id] });
+  await until('shared with B', () => has(B, id2));
+  assert.deepEqual(B.intake.item(id2).shared_with, [B.me.id]);
+  assert.deepEqual(B.intake.list({ view: 'shared' }).items.map((x) => x.id), [id2]);
+  assert.equal(B.intake.list({ view: 'mine' }).items.length, 0);
+  assert.equal(A.intake.list({ view: 'shared' }).items.length, 0);
+  await settle(); assert.ok(!has(C, id2));
+  assert.throws(() => A.intake.share({ id: id2, users: ['0'.repeat(20)] }), /Unknown member/);
+  A.intake.share({ id: id2, users: [] });
+  await until('unshared: B lost it', () => !has(B, id2));
+  assert.ok(has(A, id2));
+  ok('privacy: Share with adds one teammate, shows under "Shared with me", and unsharing removes their copy');
+
+  // 5. Receiving side: a frame for an item I have no part in is dropped, as is a delete request from an outsider.
+  const foreign = { ...A.intake.item(id2) }; delete foreign.seen;
+  A.intake.send([B.me.id], { t: 'iitem', id: 'iitem:forced:1', item: foreign }); // what an old version would have sent to everyone
+  C.intake.send([A.me.id], { t: 'irevoke', id: 'irevoke:forced:1', itemId: id2 }); // C is not in id2's audience
+  C.intake.send([A.me.id], { t: 'icom', id: 'icom:forced:1', comment: { id: 'ab'.repeat(10), item: id2, author: C.me.id, ts: Date.now(), text: 'outsider' } });
+  await until('forced frames were acknowledged', () => A.store.pendingFor(B.me.id).length === 0 && C.store.pendingFor(A.me.id).length === 0);
+  assert.ok(!has(B, id2) && has(A, id2) && A.intake.get({ id: id2 }).thread.length === 0);
+  ok('privacy: receivers drop items, comments and delete requests from people outside the item\'s audience');
+
+  // 6. Admin rules: sender -> member, and a chat rule with members [A, C]. New items in that chat go to A and C only.
+  A.intake.claimAdmin();
+  A.intake.updateTeam({ rules: [{ kind: 'sender', match: 'chinmay', user: C.me.id }, { kind: 'chat', match: 'Launch Group', project: 'Launch', members: [A.me.id, C.me.id] }] });
+  await until('rules reach B and C', () => B.intake.team().rules.length === 2 && C.intake.team().rules.length === 2 && B.intake.team().admins[0] === A.me.id);
+  assert.throws(() => B.intake.updateTeam({ enabled: false }), /Only a team admin/);
+  assert.equal(A.intake.team().defaultAudience, 'private');
+  const p6 = await post(ipA, keyA, { items: [wa({ source_id: 'rule-1', chat: 'Launch Group', title: 'Launch checklist' })] });
+  const id6 = p6.body.ids[0];
+  await until('rule members get it', () => has(C, id6));
+  await settle();
+  assert.ok(has(A, id6) && !has(B, id6));
+  assert.deepEqual([C.intake.item(id6).project, C.intake.item(id6).assignee], ['Launch', A.me.id]);
+  assert.deepEqual(C.intake.list({ view: 'shared' }).items.map((x) => x.id), [id6]);
+  // sender rule: Chinmay's messages are assigned to C, so C (and only C) gets a copy
+  const p6b = await post(ipA, keyA, { items: [wa({ source_id: 'dup-1', from: 'Chinmay' })] });
+  const id7 = p6b.body.ids[0];
+  await until('assignee by sender rule', () => has(C, id7) && C.intake.item(id7).assignee === C.me.id);
+  // B's agent reports the same group message: one item, both reporters, for everyone who holds it
+  const viaB = await post(ipB, keyB, { items: [wa({ source_id: 'dup-1', from: 'Chinmay' })] });
+  assert.equal(viaB.body.ids[0], id7);
+  await until('both reporters on A, B and C', () => [A, B, C].every((m) => has(m, id7) && m.intake.item(id7).reporters.length === 2));
+  ok('admin rules: chat members [A, C] see that chat\'s items, B does not; same message from two agents is one item with two reporters');
+
+  // 7. Admin setting "Whole team": only then does a new item go to everyone, as an explicit list.
+  A.intake.updateTeam({ defaultAudience: 'team' });
+  await until('setting reaches B', () => B.intake.team().defaultAudience === 'team');
+  const p7 = await post(ipA, keyA, { items: [wa({ source_id: 'team-1', title: 'Office closed Friday', type: 'update' })] });
+  await until('whole team has it', () => has(B, p7.body.ids[0]) && has(C, p7.body.ids[0]));
+  assert.ok(A.intake.item(p7.body.ids[0]).shared_with.includes(B.me.id) && A.intake.item(p7.body.ids[0]).shared_with.includes(C.me.id));
+  A.intake.updateTeam({ defaultAudience: 'private' });
+  const p7b = await post(ipA, keyA, { items: [wa({ source_id: 'team-2' })] });
+  await settle();
+  assert.ok(!has(B, p7b.body.ids[0]) && !has(C, p7b.body.ids[0]));
+  ok('admin setting: "Whole team" shares new items with everyone; back on the default they are private again');
+
+  // 8. One-time clean-up of data left by older versions: other people's items disappear, mine stay.
+  const stray = { ...A.intake.item(id2), id: 'f'.repeat(32), source_id: 'old-1', shared_with: [] };
+  B.intake.insert(stray); B.store.run('INSERT INTO intake_comments(id,item,author,ts,text) VALUES(?,?,?,?,?)', 'cd'.repeat(10), stray.id, A.me.id, Date.now(), 'old comment');
+  const keepB = B.intake.list().items.map((x) => x.id).sort();
+  B.intake.save({ privacyMigrated: false }); // as on a computer that was just updated from an older version
+  assert.equal(B.intake.privacyMigration(), 1);
+  assert.ok(!has(B, stray.id) && B.store.get('SELECT COUNT(*) n FROM intake_comments WHERE item=?', stray.id).n === 0 && B.cfg.intake.privacyMigrated === true);
+  assert.deepEqual(B.intake.list().items.map((x) => x.id).sort(), keepB.filter((x) => x !== stray.id));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(tmp, 'Bilal', 'config.json'), 'utf8')).intake.privacyMigrated); // saved in config
+  B.intake.insert(stray);
+  assert.equal(B.intake.privacyMigration(), 0); // the flag stops a second run
+  B.intake.forget(stray.id);
+  ok('migration: items this computer has no part in are deleted once; its own items stay; the flag stops a second run');
+
+  // any member's key works on any running endpoint (one machine can serve the team later); filters and search
   const viaA = await post(ipA, keyB, { items: [wa({ source_id: 'm-2001', title: 'Deadline Friday', type: 'deadline' })] });
   assert.equal(viaA.body.created, 1);
-  assert.deepEqual(A.intake.item(viaA.body.ids[0]).reporters, [B.me.id]);
-  // per-user seen, shared status / assignee / due / comments
-  B.intake.markSeen({ id: idA });
-  assert.ok(B.intake.item(idA).seen && !A.intake.item(idA).seen && !C.intake.item(idA).seen);
-  C.intake.update({ id: idA, status: 'in_progress', due: '2026-11-21T18:00:00+05:30' });
-  await until('status sync', () => A.intake.item(idA).status === 'in_progress' && B.intake.item(idA).status === 'in_progress');
-  B.intake.update({ id: idA, assignee: B.me.id });
-  await until('reassign sync', () => A.intake.item(idA).assignee === B.me.id && C.intake.item(idA).assignee === B.me.id);
-  assert.equal(A.intake.item(idA).due, Date.parse('2026-11-21T18:00:00+05:30'));
-  C.intake.comment({ id: idA, text: 'Feedback bhej diya' });
-  await until('comment sync', () => A.intake.get({ id: idA }).thread.length === 1 && B.intake.get({ id: idA }).thread[0].author === C.me.id);
-  assert.equal(B.intake.list({ view: 'mine' }).items.some((x) => x.id === idA), true);
+  await until('B gets the item reported with its key', () => has(B, viaA.body.ids[0]));
+  assert.deepEqual(B.intake.item(viaA.body.ids[0]).reporters, [B.me.id]);
+  assert.ok(!has(A, viaA.body.ids[0])); // A only carried it: no copy stays on A
+  assert.deepEqual((await post(ipA, keyB, { items: [wa({ source_id: 'm-2001', title: 'Deadline Friday', type: 'deadline' })] })).body.created, 0);
   assert.equal(A.intake.list({ q: 'banner' }).items.length, 1);
-  assert.equal(A.intake.list({ type: 'deadline', status: 'open' }).items.length, 1);
-  ok('per-user seen; status, assignee, due date and comments sync; filters and search work');
+  assert.equal(B.intake.list({ type: 'deadline', status: 'open' }).items.length, 1);
 
   // admin sees members' intakes, can revoke a key and switch the team off; a member can switch theirs off
   await until('admin sees B', () => A.intake.state().members.some((x) => x.user === B.me.id && x.hasKey && x.last > 0));
   A.intake.revokeFor({ user: B.me.id });
   await until('B key revoked', () => !B.intake.conf().keyHash);
-  assert.equal((await post(ipB, keyB, { items: [wa({ source_id: 'm-3001' })] })).status, 401);
-  assert.equal((await post(ipA, keyB, { items: [wa({ source_id: 'm-3001' })] })).status, 401);
+  assert.equal((await post(ipB, keyB, { items: [wa()] })).status, 401);
+  assert.equal((await post(ipA, keyB, { items: [wa()] })).status, 401);
   const keyA2 = A.intake.newKey().key;
-  assert.equal((await post(ipA, keyA, { items: [wa({ source_id: 'm-3002' })] })).status, 401); // regenerating replaces the old key
+  assert.equal((await post(ipA, keyA, { items: [wa()] })).status, 401); // regenerating replaces the old key
   A.intake.updateTeam({ enabled: false });
-  assert.equal((await post(ipA, keyA2, { items: [wa({ source_id: 'm-3002' })] })).status, 403);
+  assert.equal((await post(ipA, keyA2, { items: [wa()] })).status, 403);
   A.intake.updateTeam({ enabled: true });
   let limited = 0;
-  for (let i = 0; i < 70; i++) if ((await post(ipA, keyA2, { items: [wa()] })).status === 429) limited++;
-  assert.ok(limited >= 5 && limited <= 30, 'rate limit hits: ' + limited); // 60 per minute per key, some already used above
+  for (let i = 0; i < 70; i++) if ((await post(ipA, keyA2, { items: [wa({ source_id: 'priv-1' })] })).status === 429) limited++;
+  assert.ok(limited >= 5 && limited <= 40, 'rate limit hits: ' + limited); // 60 per minute per key, some already used above
   assert.ok(A.intake.state().log.some((l) => l.status === 429) && A.store.get('SELECT COUNT(*) n FROM intake_log WHERE status=401').n >= 2);
   await A.intake.setEnabled(false);
   await assert.rejects(post(ipA, keyA2, { items: [wa()] }));

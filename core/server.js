@@ -141,6 +141,7 @@ function startServer(messenger, { port = 0, token } = {}) {
     intakeList: (p) => intake.list(p),
     intakeGet: (p) => intake.get(p),
     intakeUpdate: (p) => intake.update(p),
+    intakeShare: (p) => intake.share(p),
     intakeSeen: (p) => intake.markSeen(p),
     intakeComment: (p) => intake.comment(p),
     intakeClaimAdmin: () => intake.claimAdmin(),

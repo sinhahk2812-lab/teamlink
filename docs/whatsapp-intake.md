@@ -24,8 +24,35 @@ SQLite file, and computers talk to each other directly and encrypted. The intake
 | Real time | Pushed over the app's existing WebSocket; no polling. |
 
 Not built, because there is nothing to attach to: "convert to / attach to an existing task" (no separate task
-model exists) and "groups I belong to" (TeamLink cannot know WhatsApp membership). Instead, items go to the
-whole team unless the group's mapping rule lists specific members.
+model exists) and "groups I belong to" (TeamLink cannot know WhatsApp membership).
+
+## Privacy: who gets an item
+
+Items are **private by default**. A copy of an item, its status and its comments exists only on the computers of
+its audience:
+
+- the reporters (whose key the agent used),
+- the assignee,
+- the people it was shared with by hand ("Share with…" on the item; saved as `shared_with`),
+- the members of the item's group rule, if the admin set one.
+
+Nothing else is ever sent to the whole team, with one deliberate exception: the admin setting
+"New WhatsApp items are visible to: The whole team" (`cfg.team.defaultAudience = "team"`), which writes all
+current members into the new item's `shared_with`.
+
+- Assigning an item to someone shares it with them. They also get the comments written so far.
+- Unsharing, or assigning to someone else, sends the removed person an `irevoke` frame and their copy is deleted.
+- Every computer also checks on arrival: an item or comment is stored only if both the sender and the receiver
+  belong to its audience. This keeps out items from computers still running a version before 1.9.0.
+- People are identified by their TeamLink id (from their key pair), never by IP address.
+- Upgrading from 1.8.x runs a one-time clean-up (`intake.privacyMigrated` in `config.json`): each computer deletes
+  the items it has no part in.
+- If a teammate's agent posts to *your* endpoint with *their* key, your computer passes the item on and keeps only
+  its id (table `intake_relayed`), so repeats are still answered with `skipped`.
+
+One consequence: two members whose agents report the same message, and who share nothing else (no common
+assignee, no group rule), each keep their own private copy. They become one item with two reporters as soon as
+anyone holds both, for example through a sender or group rule.
 
 ## Setup (per member)
 
@@ -82,7 +109,7 @@ Run it twice: the first answer has `"created":1`, the second `"created":0,"skipp
 
 - **Sender rule**: WhatsApp sender name, assigned to a TeamLink member.
 - **Group rule**: WhatsApp group name, with a project, an optional default assignee, and optionally the
-  members who may see that group's items (none selected = whole team).
+  members who also get that group's items (none selected = only the reporter and assignee).
 - Assignee = sender rule's member, else group rule's member, else whoever reported the item.
 
 ## Configuration
@@ -157,7 +184,7 @@ npm test
 ```
 
 Raise `version` in `package.json`, commit and push; the next build has no intake. This was tried on a copy
-of the project: the script removed every marked line and the remaining 23 tests passed.
+of the project: the script removed every marked line and the remaining tests passed.
 
 To do it by hand instead, list every marked line with:
 
@@ -167,7 +194,7 @@ grep -rn "WHATSAPP-INTAKE" core ui electron test
 
 ### Data left on each computer
 
-Removing the code leaves four unused tables in each member's `teamlink.db` and two keys in `config.json`.
+Removing the code leaves five unused tables in each member's `teamlink.db` and two keys in `config.json`.
 They are harmless. To delete them too, close TeamLink and run on that computer's database:
 
 ```sql
@@ -175,6 +202,7 @@ DROP TABLE IF EXISTS intake_items;
 DROP TABLE IF EXISTS intake_comments;
 DROP TABLE IF EXISTS intake_members;
 DROP TABLE IF EXISTS intake_log;
+DROP TABLE IF EXISTS intake_relayed;
 ```
 
 and delete the `"intake"` and `"team"` entries from `config.json`.

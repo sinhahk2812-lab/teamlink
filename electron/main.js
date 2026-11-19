@@ -151,7 +151,7 @@ function onOpened(d) {
 // WHATSAPP-INTAKE: begin (popup for a high-priority WhatsApp item or one newly assigned to me; clicking opens the inbox)
 function onIntakeAlert(d) {
   if (messenger.cfg.popup === false) return;
-  popupData = { conv: 'intake:' + d.id, count: 1, title: d.reason === 'assigned' ? 'Assigned to you' : `High priority · ${d.sender}`,
+  popupData = { conv: 'intake:' + d.id, count: 1, title: d.reason === 'assigned' ? 'Assigned to you' : d.reason === 'shared' ? 'Shared with you' : `High priority · ${d.sender}`,
     body: messenger.popupPrefs().showText ? d.title : 'WhatsApp item', note: `${d.chat} · click to open the WhatsApp Inbox` };
   showPopup();
   if (messenger.popupPrefs().sound) shell.beep();

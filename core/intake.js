@@ -7,7 +7,9 @@
 //   * each member creates their own API key; only its SHA-256 hash is stored, and the hash is shared with
 //     the team so that any running endpoint can tell whose key a request carries (this is what lets one
 //     always-on machine serve the whole team later);
-//   * items are stored locally and synced to teammates over the normal encrypted channel;
+//   * items are stored locally and are PRIVATE by default: a copy goes only to the item's audience
+//     (reporters, assignee, people it was shared with, and the members of its chat rule), over the
+//     normal encrypted channel; people are identified by their TeamLink id, never by IP address;
 //   * the item id is a hash of (chat, source_id), so the same group message reported by two members
 //     becomes one item with two reporters;
 //   * "seen" is kept per install (= per user) and never synced; assignee, status, due date and comments are shared.
@@ -35,8 +37,10 @@ class Intake {
       CREATE INDEX IF NOT EXISTS intake_items_time ON intake_items(received_at);
       CREATE TABLE IF NOT EXISTS intake_comments(id TEXT PRIMARY KEY, item TEXT NOT NULL, author TEXT, ts INTEGER, text TEXT);
       CREATE TABLE IF NOT EXISTS intake_members(user TEXT PRIMARY KEY, key_hash TEXT, prefix TEXT, enabled INTEGER, last_received INTEGER, updated INTEGER);
+      CREATE TABLE IF NOT EXISTS intake_relayed(id TEXT NOT NULL, reporter TEXT NOT NULL, PRIMARY KEY(id, reporter));
       CREATE TABLE IF NOT EXISTS intake_log(ts INTEGER, ip TEXT, user TEXT, status INTEGER, created INTEGER, skipped INTEGER, note TEXT);
     `);
+    try { this.db.db.exec('ALTER TABLE intake_items ADD COLUMN shared_with TEXT'); } catch {} // 1.9.0: explicit per-item sharing
     this.hits = new Map(); // rate limiting: key -> [timestamps]
     this.server = null;
     this.error = '';
@@ -58,7 +62,8 @@ class Intake {
 
   team() {
     const t = this.m.cfg.team || {};
-    return { admins: Array.isArray(t.admins) ? t.admins.filter((x) => USER.test(x)) : [], enabled: t.enabled !== false, rules: Array.isArray(t.rules) ? t.rules : [], version: Number(t.version) || 0 };
+    return { admins: Array.isArray(t.admins) ? t.admins.filter((x) => USER.test(x)) : [], enabled: t.enabled !== false, rules: Array.isArray(t.rules) ? t.rules : [], version: Number(t.version) || 0,
+      defaultAudience: t.defaultAudience === 'team' ? 'team' : 'private' }; // who sees NEW items: reporter + assignee, or the whole team
   }
   isAdmin(id) { return this.team().admins.includes(id || this.m.me.id); }
 
@@ -78,8 +83,21 @@ class Intake {
   // ------------------------------------------------------------------ lifecycle
   async start() {
     this.m.on('event', (name, peers) => { if (name === 'peers') this.greetNewPeers(peers); });
+    this.privacyMigration();
     if (this.conf().enabled) await this.listen();
   }
+
+  // One-time clean-up: versions before 1.9.0 copied every item to every computer. Delete the items on this
+  // computer that I have no part in (not a reporter, not the assignee, not shared with me, not in the chat's rule).
+  privacyMigration() {
+    if ((this.m.cfg.intake || {}).privacyMigrated) return 0;
+    let removed = 0;
+    for (const r of this.db.all('SELECT * FROM intake_items')) if (!this.inAudience(this.row(r), this.m.me.id)) { this.forget(r.id); removed++; }
+    this.save({ privacyMigrated: true });
+    if (removed) this.ev('item', {});
+    return removed;
+  }
+  forget(id) { this.db.run('DELETE FROM intake_comments WHERE item=?', id); this.db.run('DELETE FROM intake_items WHERE id=?', id); }
 
   listen() {
     return new Promise((resolve) => {
@@ -226,7 +244,7 @@ class Intake {
   // ------------------------------------------------------------------ storing and merging
   row(r) {
     if (!r) return r;
-    return { ...r, links: JSON.parse(r.links || '[]'), reporters: JSON.parse(r.reporters || '[]'), seen: !!r.seen };
+    return { ...r, links: JSON.parse(r.links || '[]'), reporters: JSON.parse(r.reporters || '[]'), shared_with: JSON.parse(r.shared_with || '[]'), seen: !!r.seen };
   }
   item(id) { return this.row(this.db.get('SELECT * FROM intake_items WHERE id=?', String(id))); }
 
@@ -239,23 +257,28 @@ class Intake {
     return { assignee: known(bySender && bySender.user) || known(byChat && byChat.user) || reporter, project: clip((byChat && byChat.project) || (bySender && bySender.project) || '', 60) };
   }
 
-  // Who gets a copy: everyone, unless the chat's rule lists specific members.
-  audience(it) {
-    const rule = this.team().rules.find((r) => r.kind === 'chat' && String(r.match || '').trim().toLowerCase() === it.chat.toLowerCase());
-    if (rule && Array.isArray(rule.members) && rule.members.length) return [...new Set([...rule.members, ...it.reporters, it.assignee].filter(Boolean))];
-    return this.everyone();
+  // Who may hold a copy of an item. Private by default: the people who reported it, the assignee, the people it
+  // was explicitly shared with, and the members of its chat rule. Never "everyone" by itself: in "Whole team" mode
+  // the team's members are written into shared_with when the item is created, so the list is always explicit.
+  ruleMembers(chat) {
+    const rule = this.team().rules.find((r) => r.kind === 'chat' && String(r.match || '').trim().toLowerCase() === String(chat || '').toLowerCase());
+    return rule && Array.isArray(rule.members) ? rule.members : [];
   }
+  audience(it) {
+    return [...new Set([...(it.reporters || []), it.assignee, ...(it.shared_with || []), ...this.ruleMembers(it.chat)].filter((u) => USER.test(u || '')))];
+  }
+  inAudience(it, user) { return this.audience(it).includes(user); }
 
   insert(it) {
-    this.db.run(`INSERT INTO intake_items(id,source,source_id,chat,sender,title,type,text,links,priority,msg_time,received_at,reporters,assignee,project,status,due,updated,updated_by,seen)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+    this.db.run(`INSERT INTO intake_items(id,source,source_id,chat,sender,title,type,text,links,priority,msg_time,received_at,reporters,assignee,project,status,due,updated,updated_by,seen,shared_with)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)`,
       it.id, 'whatsapp', it.source_id, it.chat, it.sender, it.title, it.type, it.text, JSON.stringify(it.links), it.priority, it.msg_time, it.received_at,
-      JSON.stringify(it.reporters), it.assignee || '', it.project || '', it.status || 'new', it.due || null, it.updated, it.updated_by || '');
+      JSON.stringify(it.reporters), it.assignee || '', it.project || '', it.status || 'new', it.due || null, it.updated, it.updated_by || '', JSON.stringify(it.shared_with || []));
   }
 
   ingest(reporter, items) {
     const out = { created: 0, skipped: 0, ids: [] };
-    const now = Date.now();
+    const now = Date.now(), me = this.m.me.id;
     for (const src of items) {
       const id = itemId(src.chat, src.source_id);
       out.ids.push(id);
@@ -270,52 +293,80 @@ class Intake {
         }
         continue;
       }
-      const it = { ...src, id, received_at: now, reporters: [reporter], status: 'new', due: null, updated: now, updated_by: reporter, ...this.route(src, reporter) };
+      const shared_with = this.team().defaultAudience === 'team' ? [...new Set([me, reporter, ...this.everyone()])] : []; // only when the admin chose "Whole team"
+      const it = { ...src, id, received_at: now, reporters: [reporter], shared_with, status: 'new', due: null, updated: now, updated_by: reporter, ...this.route(src, reporter) };
+      if (!this.inAudience(it, me)) {
+        // A teammate's agent used this computer's endpoint and the item is not for me: pass it on, keep no copy.
+        // Only the id is remembered, so a repeated request is still answered with "skipped".
+        const before = this.db.all('SELECT reporter FROM intake_relayed WHERE id=?', id).map((r) => r.reporter);
+        if (before.includes(reporter)) { out.skipped++; continue; }
+        this.db.run('INSERT OR IGNORE INTO intake_relayed(id, reporter) VALUES(?,?)', id, reporter);
+        it.reporters = [...new Set([...before, reporter])];
+        if (before.length) out.skipped++; else out.created++;
+        this.send(this.audience(it), this.itemFrame(it));
+        continue;
+      }
       this.insert(it);
       out.created++;
       this.send(this.audience(it), this.itemFrame(it));
       this.ev('item', { id });
       this.alert(it, null);
     }
-    if (reporter === this.m.me.id) { this.save({ lastReceived: now }); this.announce(); }
+    if (reporter === me) { this.save({ lastReceived: now }); this.announce(); }
     return out;
   }
 
-  itemFrame(it) {
+  itemFrame(it, thread) {
     const { seen, ...shared } = it; // "seen" is per user and stays on this computer
-    return { t: 'iitem', id: 'iitem:' + it.id + ':' + crypto.randomBytes(4).toString('hex'), item: shared };
+    return { t: 'iitem', id: 'iitem:' + it.id + ':' + crypto.randomBytes(4).toString('hex'), item: shared, thread: thread && thread.length ? thread : undefined };
   }
 
   // An item arriving from a teammate: create it, or merge reporters and the newer shared state.
+  // It is kept only when both the sender and I belong to its audience; anything else is dropped, so a computer
+  // that still runs an old version (which sent every item to everyone) cannot fill this one with other people's items.
   onItem(from, f) {
     this.m.ack(from, f.id);
     const x = f.item;
     if (!x || typeof x !== 'object' || !/^[0-9a-f]{32}$/.test(String(x.id)) || !TYPES.includes(x.type)) return;
     const chat = clip(x.chat, 120), sourceId = String(x.source_id || '').slice(0, 200);
     if (itemId(chat, sourceId) !== x.id) return; // the id must really be the hash of (chat, source_id)
-    const reporters = (Array.isArray(x.reporters) ? x.reporters : []).filter((u) => USER.test(u)).slice(0, 50);
+    const users = (list) => (Array.isArray(list) ? list : []).filter((u) => USER.test(u)).slice(0, 200);
+    const reporters = users(x.reporters);
     const state = { assignee: USER.test(x.assignee) ? x.assignee : '', project: clip(x.project, 60), status: STATUSES.includes(x.status) ? x.status : 'new',
-      due: Number(x.due) || null, updated: Number(x.updated) || 0, updated_by: USER.test(x.updated_by) ? x.updated_by : from };
+      due: Number(x.due) || null, shared_with: users(x.shared_with), updated: Number(x.updated) || 0, updated_by: USER.test(x.updated_by) ? x.updated_by : from };
+    const claimed = { chat, reporters, ...state }, me = this.m.me.id;
     const have = this.item(x.id);
+    // The sender must have a part in the item. One exception: a new item that names me as its reporter, which is how
+    // a teammate's computer hands over what my own agent posted to its endpoint.
+    if (!this.inAudience(claimed, from) && !(!have && reporters.includes(me))) return;
     if (!have) {
+      if (!this.inAudience(claimed, me)) return; // not meant for me
       const it = { id: x.id, source_id: sourceId, chat, sender: clip(x.sender, 80), title: clip(x.title, 200), type: x.type, text: String(x.text || '').slice(0, 8000),
         links: (Array.isArray(x.links) ? x.links : []).filter((l) => typeof l === 'string' && /^https?:\/\/\S+$/i.test(l)).slice(0, 30),
         priority: x.priority === 'high' ? 'high' : 'normal', msg_time: Number(x.msg_time) || Date.now(), received_at: Math.min(Number(x.received_at) || Date.now(), Date.now()),
         reporters: reporters.length ? reporters : [from], ...state };
       this.insert(it);
+      for (const c of (Array.isArray(f.thread) ? f.thread : []).slice(0, 500)) { // comments written before I was added
+        if (!c || !/^[0-9a-f]{20}$/.test(String(c.id)) || !USER.test(c.author)) continue;
+        this.db.run('INSERT OR IGNORE INTO intake_comments(id,item,author,ts,text) VALUES(?,?,?,?,?)', c.id, it.id, c.author, Math.min(Number(c.ts) || Date.now(), Date.now()), String(c.text || '').slice(0, 4000));
+      }
       this.ev('item', { id: it.id });
       return this.alert(it, null);
     }
     const merged = [...new Set([...have.reporters, ...reporters])];
     if (merged.length !== have.reporters.length) this.db.run('UPDATE intake_items SET reporters=? WHERE id=?', JSON.stringify(merged), have.id);
     this.applyState(have, state);
+    const now = this.item(have.id);
+    if (!this.inAudience(now, me)) { this.forget(now.id); return this.ev('item', { id: now.id }); } // a newer state no longer includes me
+    // I know reporters the sender did not: tell the audience, so every copy ends up with the same list.
+    if (merged.length > reporters.length) this.send(this.audience(now), this.itemFrame(now));
     this.ev('item', { id: have.id });
   }
 
   // Shared state is last-writer-wins on (updated, updated_by), so every computer settles on the same value.
   applyState(have, s) {
     if (s.updated < have.updated || (s.updated === have.updated && String(s.updated_by) <= String(have.updated_by))) return false;
-    this.db.run('UPDATE intake_items SET assignee=?, project=?, status=?, due=?, updated=?, updated_by=? WHERE id=?', s.assignee, s.project, s.status, s.due, s.updated, s.updated_by, have.id);
+    this.db.run('UPDATE intake_items SET assignee=?, project=?, status=?, due=?, shared_with=?, updated=?, updated_by=? WHERE id=?', s.assignee, s.project, s.status, s.due, JSON.stringify(s.shared_with || []), s.updated, s.updated_by, have.id);
     this.alert({ ...have, ...s }, have);
     return true;
   }
@@ -324,27 +375,56 @@ class Intake {
   alert(it, before) {
     const me = this.m.me.id;
     const newlyMine = it.assignee === me && it.updated_by !== me && (!before || before.assignee !== me);
+    const sharedNow = !newlyMine && it.updated_by !== me && (it.shared_with || []).includes(me) && !!before && !(before.shared_with || []).includes(me);
     const urgent = !before && it.priority === 'high';
-    if (!newlyMine && !urgent) return;
+    if (!newlyMine && !urgent && !sharedNow) return;
     if (it.status === 'done') return;
-    this.m.ev('intakeAlert', { id: it.id, title: it.title, chat: it.chat, sender: it.sender, reason: newlyMine ? 'assigned' : 'high' });
+    this.m.ev('intakeAlert', { id: it.id, title: it.title, chat: it.chat, sender: it.sender, reason: newlyMine ? 'assigned' : sharedNow ? 'shared' : 'high' });
   }
 
   // ------------------------------------------------------------------ actions from the UI
-  update({ id, assignee, status, due, project }) {
+  update({ id, assignee, status, due, project, sharedWith }) {
     const have = this.item(id);
     if (!have) throw new Error('Unknown item');
-    const s = { assignee: have.assignee, project: have.project, status: have.status, due: have.due };
-    if (assignee !== undefined) { if (assignee && assignee !== this.m.me.id && !this.m.peers.has(assignee)) throw new Error('Unknown member'); s.assignee = assignee || ''; }
+    const known = (u) => u === this.m.me.id || this.m.peers.has(u);
+    const s = { assignee: have.assignee, project: have.project, status: have.status, due: have.due, shared_with: have.shared_with };
+    if (assignee !== undefined) { if (assignee && !known(assignee)) throw new Error('Unknown member'); s.assignee = assignee || ''; }
     if (status !== undefined) { if (!STATUSES.includes(status)) throw new Error('Unknown status'); s.status = status; }
     if (due !== undefined) s.due = due ? Number(due) || Date.parse(due) || null : null;
     if (project !== undefined) s.project = clip(project, 60);
+    if (sharedWith !== undefined) {
+      if (!Array.isArray(sharedWith) || sharedWith.some((u) => !USER.test(u) || !known(u))) throw new Error('Unknown member');
+      s.shared_with = [...new Set(sharedWith)].slice(0, 200);
+    }
     s.updated = Math.max(Date.now(), have.updated + 1); s.updated_by = this.m.me.id;
-    this.db.run('UPDATE intake_items SET assignee=?, project=?, status=?, due=?, updated=?, updated_by=?, seen=1 WHERE id=?', s.assignee, s.project, s.status, s.due, s.updated, s.updated_by, have.id);
+    this.db.run('UPDATE intake_items SET assignee=?, project=?, status=?, due=?, shared_with=?, updated=?, updated_by=?, seen=1 WHERE id=?', s.assignee, s.project, s.status, s.due, JSON.stringify(s.shared_with), s.updated, s.updated_by, have.id);
     const now = this.item(id);
-    this.send([...new Set([...this.audience(now), ...this.audience(have)])], this.itemFrame(now));
+    const before = this.audience(have), after = this.audience(now);
+    // People who just joined the audience (assigned to, or shared with) get the item together with the comments
+    // written so far, in one frame, so the comments cannot arrive before the item they belong to.
+    const joined = after.filter((u) => !before.includes(u));
+    this.send(after.filter((u) => !joined.includes(u)), this.itemFrame(now));
+    if (joined.length) this.send(joined, this.itemFrame(now, this.db.all('SELECT id, item, author, ts, text FROM intake_comments WHERE item=? ORDER BY ts', now.id)));
+    // People who dropped out of it (unshared, or no longer the assignee) are told to delete their copy.
+    this.revoke(now.id, before.filter((u) => !after.includes(u)));
+    if (!after.includes(this.m.me.id)) { this.forget(now.id); this.ev('item', { id }); return null; } // I gave it away entirely
     this.ev('item', { id });
     return this.view(now);
+  }
+
+  share({ id, users }) { return this.update({ id, sharedWith: users }); }
+
+  revoke(itemIdValue, users) {
+    for (const u of users) this.send([u], { t: 'irevoke', id: 'irevoke:' + itemIdValue + ':' + crypto.randomBytes(4).toString('hex'), itemId: itemIdValue });
+  }
+
+  // "Delete your copy": accepted only from someone who is in that item's audience, and never for an item I reported.
+  onItemRevoke(from, f) {
+    this.m.ack(from, f.id);
+    const have = this.item(String(f.itemId || ''));
+    if (!have || !this.inAudience(have, from) || have.reporters.includes(this.m.me.id)) return;
+    this.forget(have.id);
+    this.ev('item', { id: have.id });
   }
 
   markSeen({ id, all }) {
@@ -366,7 +446,9 @@ class Intake {
   onComment(from, f) {
     this.m.ack(from, f.id);
     const c = f.comment;
-    if (!c || !/^[0-9a-f]{20}$/.test(String(c.id)) || !this.item(c.item)) return;
+    if (!c || !/^[0-9a-f]{20}$/.test(String(c.id))) return;
+    const have = this.item(c.item);
+    if (!have || !this.inAudience(have, from)) return; // I only keep comments on items I hold, from people who share them
     const added = this.db.run('INSERT OR IGNORE INTO intake_comments(id,item,author,ts,text) VALUES(?,?,?,?,?)', c.id, String(c.item), from, Math.min(Number(c.ts) || Date.now(), Date.now()), String(c.text || '').slice(0, 4000)).changes;
     if (added) this.ev('comment', { id: c.item });
   }
@@ -375,6 +457,7 @@ class Intake {
   view(r) {
     return { id: r.id, title: r.title, type: r.type, from: r.sender, chat: r.chat, time: r.msg_time, receivedAt: r.received_at, text: r.text, links: r.links, priority: r.priority,
       reporters: r.reporters, assignee: r.assignee, project: r.project, status: r.status, due: r.due, seen: r.seen,
+      sharedWith: r.shared_with, ruleMembers: this.ruleMembers(r.chat), visibleTo: this.audience(r),
       comments: this.db.get('SELECT COUNT(*) n FROM intake_comments WHERE item=?', r.id).n };
   }
 
@@ -382,6 +465,8 @@ class Intake {
     const where = [], args = [];
     const add = (sql, ...a) => { where.push(sql); args.push(...a); };
     if (view === 'mine') add('(assignee=? OR (assignee=\'\' AND reporters LIKE ?))', this.m.me.id, `%${this.m.me.id}%`);
+    // "Shared with me": items I hold only because someone shared them (or a chat rule includes me), not ones I reported or own.
+    if (view === 'shared') add('(assignee != ? AND reporters NOT LIKE ?)', this.m.me.id, `%${this.m.me.id}%`);
     if (TYPES.includes(type)) add('type=?', type);
     if (sender) add('sender=?', String(sender));
     if (chat) add('chat=?', String(chat));
@@ -427,10 +512,11 @@ class Intake {
     return this.publishTeam({ ...this.team(), admins: [this.m.me.id] });
   }
 
-  updateTeam({ enabled, rules, admins }) {
+  updateTeam({ enabled, rules, admins, defaultAudience }) {
     if (!this.isAdmin()) throw new Error('Only a team admin can change this');
     const t = this.team();
     if (enabled !== undefined) t.enabled = !!enabled;
+    if (defaultAudience !== undefined) t.defaultAudience = defaultAudience === 'team' ? 'team' : 'private';
     if (rules !== undefined) t.rules = this.cleanRules(rules);
     if (admins !== undefined) { const list = [...new Set(admins)].filter((u) => USER.test(u)); if (!list.includes(this.m.me.id)) list.push(this.m.me.id); t.admins = list.slice(0, 20); }
     return this.publishTeam(t);
@@ -447,7 +533,8 @@ class Intake {
     if (!t || typeof t !== 'object' || !Array.isArray(t.admins)) return;
     const trusted = mine.admins.length ? mine.admins.includes(from) : t.admins.includes(from); // first admin is trusted on first sight
     if (!trusted || Number(t.version) <= mine.version) return;
-    this.m.cfg.team = { admins: t.admins.filter((u) => USER.test(u)).slice(0, 20), enabled: t.enabled !== false, rules: this.cleanRules(t.rules), version: Number(t.version) };
+    this.m.cfg.team = { admins: t.admins.filter((u) => USER.test(u)).slice(0, 20), enabled: t.enabled !== false, rules: this.cleanRules(t.rules), version: Number(t.version),
+      defaultAudience: t.defaultAudience === 'team' ? 'team' : 'private' };
     this.m.saveCfg();
     this.ev('team');
   }
@@ -466,7 +553,7 @@ class Intake {
   }
 
   onFrame(from, f) {
-    const handler = { iitem: this.onItem, icom: this.onComment, ikey: this.onKeyStatus, iteam: this.onTeam, irev: this.onRevoke }[f.t];
+    const handler = { iitem: this.onItem, icom: this.onComment, irevoke: this.onItemRevoke, ikey: this.onKeyStatus, iteam: this.onTeam, irev: this.onRevoke }[f.t];
     if (!handler) return false;
     handler.call(this, from, f);
     return true;

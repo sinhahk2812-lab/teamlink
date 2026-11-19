@@ -313,14 +313,23 @@ class Messenger extends EventEmitter {
   }
 
   async flush(peerId) {
-    if (this.flushing.has(peerId)) return;
+    this.flushAgain = this.flushAgain || new Set();
+    // Something was queued while a flush is running: remember it, so it goes out right after instead of at the next tick.
+    if (this.flushing.has(peerId)) { this.flushAgain.add(peerId); return; }
     this.flushing.add(peerId);
+    const sent = new Set(); // frames stay queued until acknowledged; do not send one twice in the same run
     try {
-      for (const row of this.store.pendingFor(peerId)) {
-        if (!(await this.sendJson(peerId, row.frame))) break;
-      }
+      do {
+        this.flushAgain.delete(peerId);
+        for (const row of this.store.pendingFor(peerId)) {
+          if (sent.has(row.id)) continue;
+          sent.add(row.id);
+          if (!(await this.sendJson(peerId, row.frame))) return;
+        }
+      } while (this.flushAgain.has(peerId));
     } finally {
       this.flushing.delete(peerId);
+      this.flushAgain.delete(peerId);
     }
   }
 

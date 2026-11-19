@@ -45,7 +45,7 @@ function intakeRefresh() {
 // Events pushed by the engine: live refresh, and a notice for high-priority or newly assigned items.
 function intakeEvent(event, d) {
   if (event === 'intake') return intakeRefresh();
-  if (event === 'intakeAlert') toast(d.reason === 'assigned' ? `Assigned to you: ${d.title}` : `High priority from ${d.sender}: ${d.title}`);
+  if (event === 'intakeAlert') toast(d.reason === 'assigned' ? `Assigned to you: ${d.title}` : d.reason === 'shared' ? `Shared with you: ${d.title}` : `High priority from ${d.sender}: ${d.title}`);
 }
 
 async function intakeExpand(id, keepOpen) {
@@ -96,12 +96,31 @@ function intakeCard(it) {
     h('div', { class: 'itext' }, linkify(it.text)),
     it.links.length ? h('div', { class: 'ilinks' }, it.links.map((l) => { let host = l; try { host = new URL(l).hostname.replace(/^www\./, ''); } catch {} return h('a', { href: l, target: '_blank', rel: 'noopener noreferrer', title: l }, '🔗 ' + host); })) : null,
     h('p', { class: 'hint' }, `WhatsApp message of ${new Date(it.time).toLocaleString()} · reported by ${it.reporters.map(iName).join(', ')}`),
+    h('p', { class: 'hint ivis' }, '🔒 Visible to: ' + it.visibleTo.map(iName).join(', ') + '. Nobody else in the team has this item.'),
     h('div', { class: 'iacts' },
       h('label', null, 'Assign to', assign), h('label', null, 'Status', status), h('label', null, 'Due date', due),
+      h('button', { class: 'ghost', onclick: () => intakeShareDialog(it) }, 'Share with…'),
       it.status !== 'done' ? h('button', { class: 'primary', onclick: () => call('intakeUpdate', { id: it.id, status: 'done' }) }, 'Mark done') : h('button', { class: 'ghost', onclick: () => call('intakeUpdate', { id: it.id, status: 'in_progress' }) }, 'Reopen')),
     h('div', { class: 'ithread' }, I.thread.map((c) => h('div', { class: 'inote' }, h('b', null, iName(c.author)), h('span', { class: 'itime' }, fmtWhen(c.ts)), h('div', null, linkify(c.text))))),
     h('div', { class: 'inoterow' }, note, h('button', { class: 'ghost', onclick: addNote }, 'Comment'))));
   return card;
+}
+
+// "Share with...": pick teammates one by one. Unticking someone deletes the item from their computer.
+function intakeShareDialog(it) {
+  const people = [...S.peers.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const fixed = new Set([...it.reporters, it.assignee, ...it.ruleMembers].filter(Boolean)); // they have it for another reason
+  const boxes = people.map((p) => h('label', null, h('input', { type: 'checkbox', value: p.id, checked: it.sharedWith.includes(p.id) || fixed.has(p.id), disabled: fixed.has(p.id) }), avatar(p.id, p.name),
+    h('span', null, p.name + (it.reporters.includes(p.id) ? ' (reported it)' : it.assignee === p.id ? ' (assignee)' : it.ruleMembers.includes(p.id) ? ' (in this group\'s rule)' : ''))));
+  modal('Share this item', [
+    h('div', { class: 'quote' }, h('b', null, it.chat + ' · ' + it.from), h('span', null, it.title)),
+    h('p', { class: 'hint' }, 'Only the people ticked here can see this item, its status and its comments. Untick someone to remove it from their computer.'),
+    people.length ? h('div', { class: 'pick' }, boxes) : h('p', { class: 'hint' }, 'No teammates found yet.'),
+  ], { label: 'Save', run: async () => {
+    const users = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked && !i.disabled).map((i) => i.value);
+    await call('intakeShare', { id: it.id, users });
+    toast(users.length ? `Shared with ${users.length} ${users.length === 1 ? 'person' : 'people'}` : 'Not shared with anyone now');
+  } });
 }
 
 function intakeRender() {
@@ -112,7 +131,7 @@ function intakeRender() {
   $('inbox').replaceChildren(
     h('header', { class: 'ibar' },
       h('button', { id: 'inboxBack', class: 'icon-btn', title: 'Back', onclick: () => { intakeClose(); document.body.classList.remove('in-chat'); $('empty').hidden = false; } }, '←'),
-      h('b', { class: 'ihdr' }, '📥 WhatsApp Inbox'), tab('mine', 'Mine'), tab('team', 'Team'),
+      h('b', { class: 'ihdr' }, '📥 WhatsApp Inbox'), tab('mine', 'Mine'), tab('shared', 'Shared with me'), tab('team', 'All'),
       h('span', { class: 'ispace' }),
       h('button', { class: 'ghost', onclick: async () => { await call('intakeSeen', { all: true }); } }, 'Mark all seen'),
       h('button', { class: 'icon-btn', title: 'WhatsApp Intake settings', onclick: intakeSettings }, '⚙')),
@@ -123,7 +142,8 @@ function intakeRender() {
       intakeSelect('status', [['open', 'Open'], ['', 'Any status'], ...Object.entries(I_STATUS)], 'Status'),
       intakeSelect('assignee', [['', 'Any assignee'], ['none', 'Unassigned'], ...people], 'Assignee')),
     h('div', { class: 'ilist' }, I.items.length ? I.items.map(intakeCard)
-      : h('div', { class: 'notice' }, I.view === 'mine' ? 'Nothing here for you. Items assigned to you, or reported by you and not assigned to anyone, appear here.' : 'No WhatsApp items match these filters yet.')));
+      : h('div', { class: 'notice' }, I.view === 'mine' ? 'Nothing here for you. Items assigned to you, or reported by you and not assigned to anyone, appear here.'
+        : I.view === 'shared' ? 'Nothing has been shared with you. Items a teammate shares with you, or from a group the admin added you to, appear here.' : 'No WhatsApp items match these filters yet.')));
 }
 
 // ---------------------------------------------------------------- settings (mine + team admin)
@@ -165,6 +185,9 @@ function intakeAdmin(st) {
   const team = st.team;
   const people = [[S.me.id, S.me.name + ' (me)'], ...[...S.peers.values()].sort((a, b) => a.name.localeCompare(b.name)).map((p) => [p.id, p.name])];
   const teamOn = h('input', { type: 'checkbox', checked: team.enabled, onchange: async () => { await call('intakeUpdateTeam', { enabled: teamOn.checked }); toast(teamOn.checked ? 'Team intake is on' : 'Team intake is off for everyone'); } });
+  const scope = h('select', { onchange: async () => { await call('intakeUpdateTeam', { defaultAudience: scope.value }); toast(scope.value === 'team' ? 'New items now go to the whole team' : 'New items are private again'); } },
+    h('option', { value: 'private' }, 'Only the reporter and the assignee (private)'), h('option', { value: 'team' }, 'The whole team'));
+  scope.value = team.defaultAudience || 'private';
   const rules = team.rules.map((r) => ({ ...r, members: [...(r.members || [])] }));
   const box = h('div', { class: 'irules' });
   const draw = () => box.replaceChildren(...rules.map((r, i) => {
@@ -174,20 +197,22 @@ function intakeAdmin(st) {
     const project = h('input', { type: 'text', value: r.project || '', placeholder: 'Project', oninput: () => { r.project = project.value; } });
     const row = h('div', { class: 'irule' }, kind, match, user, project, h('button', { class: 'ghost', type: 'button', title: 'Remove', onclick: () => { rules.splice(i, 1); draw(); } }, '×'));
     if (r.kind !== 'chat') return row;
-    const vis = h('select', { multiple: true, size: Math.min(4, people.length), title: 'Who sees items from this group. Select nobody for the whole team.', onchange: () => { r.members = [...vis.selectedOptions].map((o) => o.value); } }, people.map(([id, n]) => h('option', { value: id, selected: r.members.includes(id) }, n)));
-    return h('div', null, row, h('div', { class: 'irulevis' }, h('span', { class: 'hint' }, 'Visible to (Ctrl+click; none selected = whole team):'), vis));
+    const vis = h('select', { multiple: true, size: Math.min(4, people.length), title: 'Who also gets items from this group. Select nobody to keep them with the reporter and assignee only.', onchange: () => { r.members = [...vis.selectedOptions].map((o) => o.value); } }, people.map(([id, n]) => h('option', { value: id, selected: r.members.includes(id) }, n)));
+    return h('div', null, row, h('div', { class: 'irulevis' }, h('span', { class: 'hint' }, 'Also visible to (Ctrl+click; none = reporter and assignee only):'), vis));
   }));
   draw();
   const admins = h('select', { multiple: true, size: Math.min(4, people.length), onchange: () => {} }, people.map(([id, n]) => h('option', { value: id, selected: team.admins.includes(id) }, n)));
   return [
     h('label', null, teamOn, ' WhatsApp Intake is on for the team'),
+    h('label', null, 'New WhatsApp items are visible to'), scope,
+    h('p', { class: 'hint' }, 'Private is the default: an item stays with whoever reported it and whoever it is assigned to, plus the members of its group rule. People can still share single items by hand.'),
     h('label', null, 'Connected intakes'),
     h('div', { class: 'imembers' }, st.members.map((mb) => h('div', { class: 'imember' },
       h('b', null, iName(mb.user)), h('span', null, mb.hasKey ? `key ${mb.prefix}…` : 'no key'), h('span', null, mb.enabled ? 'on' : 'off'),
       h('span', null, mb.last ? 'last ' + fmtWhen(mb.last) + ' ' + fmtTime(mb.last) : 'never received'),
       mb.hasKey ? h('button', { class: 'ghost', type: 'button', onclick: async () => { await call('intakeRevokeFor', { user: mb.user }); toast('Key revoked'); intakeSettings(); } }, 'Revoke') : h('span')))),
     h('label', null, 'Mapping: who and which project each sender or group belongs to'),
-    h('p', { class: 'hint' }, 'A sender rule assigns that person\'s messages to a member. A group rule sets the project and, if you choose, a default assignee and who can see the group\'s items. Anything unmapped goes to whoever reported it.'),
+    h('p', { class: 'hint' }, 'A sender rule assigns that person\'s messages to a member. A group rule sets the project and, if you choose, a default assignee and the members who also see that group\'s items. Anything unmapped stays with whoever reported it.'),
     box,
     h('div', { class: 'btn-row' },
       h('button', { class: 'ghost', type: 'button', onclick: () => { rules.push({ kind: 'sender', match: '', user: '', project: '', members: [] }); draw(); } }, '＋ Add rule'),
