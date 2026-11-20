@@ -141,8 +141,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 .pick label { display: flex !important; align-items: center; gap: 8px; margin: 0 !important; padding: 7px 10px; font-weight: 400 !important; cursor: pointer; }
 .pick label:hover { background: var(--bg); }
 .code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; color: var(--dim); }
-#viewer { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; z-index: 20; cursor: zoom-out; }
-#viewer img { max-width: 94vw; max-height: 94vh; }
+#viewer { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: flex; align-items: center; justify-content: center; z-index: 20; overflow: hidden; }
+#viewer img { max-width: 94vw; max-height: 88vh; transform-origin: center center; user-select: none; touch-action: none; will-change: transform; }
 #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: #111827; color: #fff; padding: 9px 16px; border-radius: 10px; z-index: 30; max-width: 90vw; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
 
 @media (max-width: 720px) {
@@ -171,7 +171,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 .shot-bar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shot-bar button, .shot-bar a { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 6px; padding: 2px 10px; font-size: 12.5px; text-decoration: none; cursor: pointer; flex: none; }
 .shot-bar button:hover, .shot-bar a:hover { background: var(--accent); color: #fff; }
-#viewerSave { position: fixed; top: 16px; right: 16px; cursor: pointer; }
+#viewerBar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 999px; background: rgba(20,24,34,.82); border: 1px solid rgba(255,255,255,.2); box-shadow: 0 8px 26px rgba(0,0,0,.5); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+#viewerBar button { border: 0; background: none; color: #fff; font: inherit; font-size: 15px; min-width: 34px; height: 32px; padding: 0 10px; border-radius: 999px; cursor: pointer; }
+#viewerBar button:hover { background: rgba(255,255,255,.18); }
+#viewerZoom { color: #fff; font-size: 13px; width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
 
 .file-all { white-space: normal; margin-top: 6px; }
 .file-all button { border: 0; background: var(--accent); color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
@@ -534,3 +537,21 @@ body[data-style="glass"] #starBtn { border-radius: 18px; }
 .item.drop-target, body[data-style="glass"] .item.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: color-mix(in srgb, var(--accent) 26%, transparent); }
 .item.drop-target .sub::after { content: "  ·  drop to send here"; color: var(--accent); font-weight: 600; }
 body.dragging #lists .item * { pointer-events: none; } /* the row itself is the drop target, not the avatar or text inside it */
+
+/* ---------- typing indicator ---------- */
+.typing { color: var(--accent) !important; font-style: italic; }
+.item.active .sub.typing { color: #fff !important; }
+#typingBar { display: flex; align-items: center; gap: 8px; padding: 2px 18px; font-size: 12.5px; color: var(--dim); flex: none; }
+.dots { display: inline-flex; gap: 3px; padding: 6px 9px; border-radius: 999px; background: var(--theirs); border: 1px solid var(--line); }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); opacity: .5; }
+@keyframes typingDot { 0%, 60%, 100% { transform: none; opacity: .4; } 30% { transform: translateY(-4px); opacity: 1; } }
+body[data-motion="on"] .dots i { animation: typingDot 1.2s ease-in-out infinite; }
+body[data-motion="on"] .dots i:nth-child(2) { animation-delay: .15s; }
+body[data-motion="on"] .dots i:nth-child(3) { animation-delay: .3s; }
+body[data-style="glass"] .dots { border-color: var(--lg-rim); background: var(--lg-sheen), var(--lg-fill); }
+/* ---------- cancel a download ---------- */
+.file button.cancel { border-color: #ef4444; color: #ef4444; }
+.file button.cancel:hover { background: #ef4444; color: #fff; }
+/* hover must never move a bubble: a moving bubble can slip out from under the mouse and flicker */
+body[data-motion="on"] .msg:hover .bubble:not(.jumbo) { transform: none; }
+body[data-motion="on"] #viewer:not([hidden]) img { animation: none; }

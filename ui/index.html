@@ -58,6 +58,7 @@
         <input id="emojiSearch" type="search" placeholder="Search emoji" autocomplete="off">
         <div id="emojiGrid"></div>
       </div>
+      <div id="typingBar" hidden></div>
       <div id="selBar" hidden></div>
       <footer id="composer">
         <div id="replyBar" hidden></div>
@@ -79,7 +80,13 @@
 </div>
 
 <div id="modal" hidden><div id="modalCard"></div></div>
-<div id="viewer" hidden><img id="viewerImg" alt=""><button id="viewerSave" class="primary">Save image</button></div>
+<div id="viewer" hidden>
+  <img id="viewerImg" alt="" draggable="false">
+  <div id="viewerBar">
+    <button id="viewerOut" title="Zoom out (-)">−</button><span id="viewerZoom">100%</span><button id="viewerIn" title="Zoom in (+)">＋</button>
+    <button id="viewerFit" title="Fit to screen (0)">Fit</button><button id="viewerSave">Save</button><button id="viewerClose" title="Close (Esc)">✕</button>
+  </div>
+</div>
 <div id="toast" hidden></div>
 <script src="emoji.js"></script>
 <script src="app.js"></script>

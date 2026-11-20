@@ -101,6 +101,7 @@ function onEvent(event, d) {
   else if (event === 'net') { S.net = d; renderNet(); }
   else if (event === 'message') onMessage(d);
   else if (event === 'file') onFile(d);
+  else if (event === 'typing') onTyping(d);
   else if (event === 'reacted') { reactAt.set(d.id + d.emoji, Date.now()); if (d.conv !== S.active || !document.hasFocus()) toast(`${peerName(d.by)} reacted ${d.emoji} to your message`); }
   else if (event === 'messageGone') { if (d.conv === S.active) { S.msgs = S.msgs.filter((x) => x.id !== d.id); renderMessages(false); } }
   else if ((event === 'intake' || event === 'intakeAlert') && typeof intakeEvent === 'function') intakeEvent(event, d); // WHATSAPP-INTAKE
@@ -265,13 +266,14 @@ function renderSide() {
     const dm = c.type === 'dm' ? S.peers.get(c.id.slice(3)) : null;
     const last = c.last;
     let sub = last ? last.preview : c.type === 'all' ? 'Announcements for the whole team' : c.left ? 'You left this group' : `${c.members.length} members`;
+    const typingText = typingNames(c.id);
     if (last && c.type !== 'dm') sub = (last.sender === S.me.id ? 'You' : memberName(c, last.sender).split(' ')[0]) + ': ' + sub;
     else if (last && last.sender === S.me.id) sub = 'You: ' + sub;
     return recent(pingAt, c.id, 1300, h('li', { class: 'item' + (c.id === S.active ? ' active' : ''), 'data-conv': c.id, onclick: () => openConv(c.id) },
       avatar(c.type === 'dm' ? c.id.slice(3) : c.id, c.type === 'all' ? '📢' : convName(c), dm ? dotOf(dm) : null),
       h('div', { class: 'body' },
         h('div', { class: 'top' }, h('span', { class: 'name' }, convName(c)), last && h('span', { class: 'time' }, fmtWhen(last.ts))),
-        h('div', { class: 'sub' }, sub)),
+        h('div', { class: 'sub' + (typingText ? ' typing' : '') }, typingText || sub)),
       c.mentions ? h('span', { class: 'badge at', title: 'You were mentioned' }, '@') : null,
       c.unread ? h('span', { class: 'badge' }, String(c.unread)) : null), 'ping');
   }));
@@ -338,7 +340,7 @@ async function openConv(id, focusMsg, sub) {
   S.active = id;
   if (changed || sub !== undefined) S.sub = sub || '';
   if (changed) rpc('hideSealed', {}).catch(() => {});
-  if (changed) { S.sel = null; S.editing = null; closeMenu(); renderSel(); }
+  if (changed) { S.sel = null; S.editing = null; closeMenu(); renderSel(); msgCache.clear(); $('messages').replaceChildren(); }
   if (desk && desk.setActiveConv) desk.setActiveConv(id);
   if (changed) { S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); }
   document.body.classList.add('in-chat');
@@ -410,7 +412,10 @@ function renderHead() {
   else if (!dm) sub = '';
   else if (!dm.online) sub = 'Offline. Messages are delivered when they come back.';
   else sub = (dm.status === 'away' ? 'Away' + (dm.absenceMsg ? ': ' + dm.absenceMsg : '') : 'Online') + (dm.via === 'relay' ? ' · remote (via relay)' : ' · on your network') + (dm.dept ? ' · ' + dm.dept : '');
-  $('chatSub').textContent = sub;
+  const typingText = typingNames(c.id);
+  $('chatSub').textContent = typingText || sub;
+  $('chatSub').classList.toggle('typing', !!typingText);
+  if ($('typingBar').hidden !== !typingText) { $('typingBar').hidden = !typingText; if (typingText) $('typingBar').replaceChildren(h('span', { class: 'dots' }, h('i'), h('i'), h('i')), typingText); }
   renderSubs(); renderPins();
   $('groupEditBtn').hidden = c.type !== 'group' || c.left;
   $('chatMenuBtn').hidden = c.type === 'all';
@@ -442,21 +447,22 @@ function fileNode(m, f) {
   if (f.image && ready) {
     const base = f.name.split(/[\\/]/).pop();
     return h('div', { class: 'shot-wrap' },
-      h('img', { class: 'shot', src: fileUrl(f.fid), alt: f.name, title: 'Click to enlarge', loading: 'lazy', onclick: () => { viewing = f; $('viewerImg').src = fileUrl(f.fid); $('viewer').hidden = false; } }),
+      h('img', { class: 'shot', src: fileUrl(f.fid), alt: f.name, title: 'Click to enlarge', loading: 'lazy', onclick: () => openViewer(f) }),
       h('div', { class: 'shot-bar' }, h('span', { title: base }, `${base} · ${fmtSize(f.size)}`),
         desk ? h('button', { onclick: () => saveImage(f) }, 'Save') : h('a', { href: fileUrl(f.fid, true), download: base }, 'Save')));
   }
   let sub = fmtSize(f.size), action = null, bar = null;
   if (prog && prog.state === 'downloading') {
-    sub += ` · ${Math.round((prog.progress || 0) * 100)}%`;
+    sub = [sub + ' · ', h('span', { class: 'pct' }, Math.round((prog.progress || 0) * 100) + '%')];
     bar = h('div', { class: 'bar' }, Object.assign(h('i'), { style: `width:${Math.round((prog.progress || 0) * 100)}%` }));
+    action = h('button', { class: 'cancel', title: 'Stop this download', onclick: () => rpc('cancelDownload', { fid: f.fid }).catch((e) => toast(e.message)) }, 'Cancel');
   } else if (ready && !m.mine) {
     action = desk ? [h('button', { onclick: () => desk.openPath(f.path) }, 'Open'), h('button', { onclick: () => desk.showItem(f.path) }, 'Folder')]
       : h('a', { class: 'btn', href: fileUrl(f.fid, true) }, 'Save');
   } else if (!ready) {
     action = h('button', { onclick: () => downloadFile(f) }, 'Download');
   }
-  return h('div', { class: 'file' }, h('span', null, '📄'),
+  return h('div', { class: 'file', 'data-fid': f.fid }, h('span', null, '📄'),
     h('div', { class: 'info' }, h('div', { class: 'fname', title: f.name }, f.name),
       h('div', { class: 'fsub' }, sub, prog && prog.error ? h('span', { class: 'err' }, ' · ' + prog.error) : null), bar),
     action);
@@ -723,25 +729,44 @@ function openLocked(m) {
   pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('modalCard').querySelector('.actions .primary').click(); });
 }
 
+// The message list is updated in place: a message's element is rebuilt only when something about that message
+// changed, and elements that are already right are not touched. Rebuilding everything on every event (a download
+// reports progress five times a second) made the message under the mouse flicker.
+const msgCache = new Map(); // key -> { sig, node }
 function renderMessages(toBottom) {
   const box = $('messages');
   const c = S.convs.get(S.active);
   if (!c) return;
   const stick = toBottom || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-  const nodes = [];
+  const want = [], used = new Set();
+  const keep = (key, sig, make) => {
+    let e = msgCache.get(key);
+    if (!e || e.sig !== sig) { e = { sig, node: make() }; msgCache.set(key, e); }
+    used.add(key); want.push(e.node);
+  };
   let day = '', prev = null;
   for (const m of S.msgs) {
     const d = fmtDay(m.ts);
-    if (d !== day) { nodes.push(h('div', { class: 'day' }, d)); day = d; prev = null; }
-    nodes.push(msgNode(m, c, c.type !== 'dm' && !m.mine && prev !== m.sender));
+    if (d !== day) { keep('day:' + d + ':' + m.id, d, () => h('div', { class: 'day' }, d)); day = d; prev = null; }
+    const showWho = c.type !== 'dm' && !m.mine && prev !== m.sender;
+    const sig = JSON.stringify([m, showWho, showWho && memberName(c, m.sender), !!S.sel, !!(S.sel && S.sel.has(m.id)), c.left, c.type, S.me.hasLock, m.files.map((f) => { const pr = S.progress.get(f.fid); return pr ? [pr.state, pr.error || ''] : 0; })]); // not the percentage: that is updated in place
+    keep('m:' + m.id, sig, () => msgNode(m, c, showWho));
     prev = m.mine ? null : m.sender;
   }
-  if (!S.msgs.length) nodes.push(h('div', { class: 'notice' }, c.type === 'all' ? 'Messages here go to everyone in the team.' : 'No messages yet. Say hello.'));
-  box.replaceChildren(...nodes);
-  if (stick) { box.scrollTop = box.scrollHeight; for (const img of box.querySelectorAll('img.shot')) img.addEventListener('load', () => { box.scrollTop = box.scrollHeight; }, { once: true }); }
+  if (!S.msgs.length) { const text = c.type === 'all' ? 'Messages here go to everyone in the team.' : 'No messages yet. Say hello.'; keep('empty', text, () => h('div', { class: 'notice' }, text)); }
+  for (const key of [...msgCache.keys()]) if (!used.has(key)) msgCache.delete(key);
+  // put the wanted elements in order, moving or adding only what differs
+  let at = box.firstChild;
+  for (const node of want) {
+    if (node === at) at = at.nextSibling;
+    else box.insertBefore(node, at);
+  }
+  while (at) { const next = at.nextSibling; at.remove(); at = next; }
+  if (stick) { box.scrollTop = box.scrollHeight; for (const img of box.querySelectorAll('img.shot')) if (!img.complete) img.addEventListener('load', () => { box.scrollTop = box.scrollHeight; }, { once: true }); }
 }
 
 function onMessage(m) {
+  if (!m.mine) typingStop(m.conv, m.sender); // their message arrived: they are not typing any more
   if (m.conv !== S.active || (m.sub || '') !== S.sub) return;
   const i = S.msgs.findIndex((x) => x.id === m.id);
   if (i < 0) freshAt.set(m.id, Date.now());
@@ -752,8 +777,13 @@ function onMessage(m) {
   if (i < 0 && !m.mine) markRead();
 }
 function onFile(d) {
+  const before = S.progress.get(d.fid);
   if (d.state === 'downloading' || d.error) S.progress.set(d.fid, d); else S.progress.delete(d.fid);
-  if (d.error) toast(d.error);
+  if (d.error) { toast(d.error); if (d.error === 'Download cancelled') S.progress.delete(d.fid); }
+  if (d.state === 'downloading' && before && before.state === 'downloading') { // only the number moved: change it where it stands
+    const card = document.querySelector(`.file[data-fid="${d.fid}"]`), pct = Math.round((d.progress || 0) * 100) + '%';
+    if (card) { const t = card.querySelector('.pct'), bar = card.querySelector('.bar i'); if (t) t.textContent = pct; if (bar) bar.style.width = pct; return; }
+  }
   const m = S.msgs.find((x) => x.id === d.msg);
   if (!m) return;
   const f = m.files.find((x) => x.fid === d.fid);
@@ -803,6 +833,7 @@ async function send() {
     }
     await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, sub: S.sub || undefined, mentions: draftMentions(text), paths: S.pending.map((a) => a.path) });
     $('input').value = ''; autoGrow(); toggleEmoji(false);
+    typingSentAt = 0; // the next thing I type is announced straight away
     const sb = $('sendBtn'); sb.classList.remove('launch', 'ready'); void sb.offsetWidth; sb.classList.add('launch'); setTimeout(() => sb.classList.remove('launch'), 600);
     S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); renderHead();
   } catch {} finally { sending = false; $('sendBtn').disabled = false; $('input').focus(); }
@@ -810,6 +841,46 @@ async function send() {
 function autoGrow() { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, 140) + 'px'; }
 $('input').addEventListener('input', autoGrow);
 $('input').addEventListener('input', () => $('sendBtn').classList.toggle('ready', !!$('input').value.trim()));
+
+// ---------------------------------------------------------------- "is typing"
+// Sending: at most one hint every three seconds while I type. Showing: a hint lasts five seconds, or until their message arrives.
+let typingSentAt = 0;
+$('input').addEventListener('input', () => {
+  const c = S.convs.get(S.active);
+  if (!c || c.type === 'all' || c.left || S.sealed || S.editing || !$('input').value.trim() || Date.now() - typingSentAt < 3000) return;
+  typingSentAt = Date.now();
+  rpc('typing', { conv: S.active, sub: S.sub || undefined }).catch(() => {});
+});
+const typingNow = new Map(); // conv -> Map(user -> timer)
+function typingNames(convId) {
+  const c = S.convs.get(convId), who = [...(typingNow.get(convId) || new Map()).keys()];
+  if (!c || !who.length) return '';
+  if (c.type === 'dm') return 'typing…';
+  const names = who.map((u) => memberName(c, u).split(' ')[0]);
+  return names.length === 1 ? `${names[0]} is typing…` : names.length === 2 ? `${names[0]} and ${names[1]} are typing…` : `${names.length} people are typing…`;
+}
+function typingStop(convId, user) {
+  const map = typingNow.get(convId);
+  if (!map || !map.has(user)) return;
+  clearTimeout(map.get(user)); map.delete(user);
+  if (!map.size) typingNow.delete(convId);
+  renderTyping(convId);
+}
+function onTyping(d) {
+  if (!typingNow.has(d.conv)) typingNow.set(d.conv, new Map());
+  const map = typingNow.get(d.conv);
+  clearTimeout(map.get(d.from));
+  map.set(d.from, setTimeout(() => typingStop(d.conv, d.from), 5000));
+  renderTyping(d.conv);
+}
+function renderTyping(convId) {
+  renderSide();
+  if (convId !== S.active) return;
+  renderHead();
+  const text = typingNames(convId), bar = $('typingBar');
+  bar.hidden = !text;
+  if (text) bar.replaceChildren(h('span', { class: 'dots' }, h('i'), h('i'), h('i')), text);
+}
 // ---------------------------------------------------------------- @mentions (tags) in groups and the Everyone channel
 const tagged = new Map(); // "@Name" as typed in this draft -> member id (or 'all')
 let tagPick = 0, tagList = [];
@@ -1012,7 +1083,37 @@ document.addEventListener('drop', async (e) => {
   addFiles(files);
   $('input').focus();
 }, true);
-$('viewer').addEventListener('click', () => { $('viewer').hidden = true; });
+// ---------------------------------------------------------------- picture viewer: zoom with the wheel, buttons or a click; drag to move
+const V = { scale: 1, x: 0, y: 0, drag: null, moved: false };
+function viewerApply() {
+  const img = $('viewerImg');
+  img.style.transform = `translate(${V.x}px, ${V.y}px) scale(${V.scale})`;
+  img.style.cursor = V.scale > 1 ? (V.drag ? 'grabbing' : 'grab') : 'zoom-in';
+  $('viewerZoom').textContent = Math.round(V.scale * 100) + '%';
+}
+function viewerZoom(factor, cx, cy) {
+  const img = $('viewerImg'), r = img.getBoundingClientRect();
+  const next = Math.min(8, Math.max(1, V.scale * factor));
+  if (next === V.scale) return;
+  // keep the point under the cursor (or the centre) where it is while the picture grows or shrinks
+  const px = (cx === undefined ? innerWidth / 2 : cx) - (r.left + r.width / 2), py = (cy === undefined ? innerHeight / 2 : cy) - (r.top + r.height / 2);
+  const k = next / V.scale;
+  V.x -= px * (k - 1); V.y -= py * (k - 1); V.scale = next;
+  if (V.scale === 1) { V.x = 0; V.y = 0; }
+  viewerApply();
+}
+function openViewer(f) { viewing = f; Object.assign(V, { scale: 1, x: 0, y: 0, drag: null }); $('viewerImg').src = fileUrl(f.fid); $('viewer').hidden = false; viewerApply(); }
+function closeViewer() { $('viewer').hidden = true; }
+$('viewer').addEventListener('click', (e) => { if (e.target === $('viewer')) closeViewer(); });
+$('viewer').addEventListener('wheel', (e) => { e.preventDefault(); viewerZoom(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX, e.clientY); }, { passive: false });
+$('viewerImg').addEventListener('pointerdown', (e) => { e.preventDefault(); V.drag = { x: e.clientX - V.x, y: e.clientY - V.y }; V.moved = false; $('viewerImg').setPointerCapture(e.pointerId); viewerApply(); });
+$('viewerImg').addEventListener('pointermove', (e) => { if (!V.drag) return; const nx = e.clientX - V.drag.x, ny = e.clientY - V.drag.y; if (Math.abs(nx - V.x) + Math.abs(ny - V.y) > 3) V.moved = true; if (V.scale > 1) { V.x = nx; V.y = ny; viewerApply(); } });
+$('viewerImg').addEventListener('pointerup', (e) => { const was = V.drag; V.drag = null; if (was && !V.moved) viewerZoom(V.scale > 1 ? 1 / V.scale : 2.5, e.clientX, e.clientY); else viewerApply(); }); // a plain click zooms in, or back out
+$('viewerIn').addEventListener('click', () => viewerZoom(1.4));
+$('viewerOut').addEventListener('click', () => viewerZoom(1 / 1.4));
+$('viewerFit').addEventListener('click', () => viewerZoom(1 / V.scale));
+$('viewerClose').addEventListener('click', closeViewer);
+document.addEventListener('keydown', (e) => { if ($('viewer').hidden) return; if (e.key === '+' || e.key === '=') viewerZoom(1.4); else if (e.key === '-') viewerZoom(1 / 1.4); else if (e.key === '0') viewerZoom(1 / V.scale); });
 $('viewerSave').addEventListener('click', (e) => { e.stopPropagation(); if (viewing) saveImage(viewing).catch(() => {}); });
 $('backBtn').addEventListener('click', closeChat);
 $('chatMenuBtn').addEventListener('click', () => {

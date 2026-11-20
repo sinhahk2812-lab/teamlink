@@ -349,7 +349,7 @@ class Messenger extends EventEmitter {
     let f;
     try { f = JSON.parse(plain.subarray(1).toString()); } catch { return; }
     try {
-      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete, react: this.onReact, pin: this.onPin, edit: this.onEdit }[f.t];
+      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete, react: this.onReact, pin: this.onPin, edit: this.onEdit, typing: this.onTyping, fcancel: this.onFileCancel }[f.t];
       if (handler) handler.call(this, from, f);
       else this.intake.onFrame(from, f); // WHATSAPP-INTAKE
     } catch (e) {
@@ -964,6 +964,41 @@ class Messenger extends EventEmitter {
     this.endDownload(d, null);
   }
 
+  // The receiver stops a download: the partial file is removed and the sender is told to stop sending.
+  cancelDownload(fid) {
+    const d = [...this.downloads.values()].find((x) => x.fid === String(fid));
+    if (!d) return false;
+    this.sendJson(d.from, { t: 'fcancel', xid: d.xid });
+    this.endDownload(d, 'Download cancelled');
+    return true;
+  }
+  onFileCancel(from, f) {
+    const xid = String(f.xid || '');
+    if (!/^[0-9a-f]{16}$/.test(xid)) return;
+    this.stopSending = this.stopSending || new Set();
+    this.stopSending.add(xid);
+    setTimeout(() => this.stopSending.delete(xid), 60000).unref(); // in case that transfer had already finished
+  }
+
+  // ---- "is typing": a hint only. Sent at most every few seconds, never queued, never stored.
+  typing({ conv: convId, sub }) {
+    convId = String(convId);
+    let to, wire;
+    if (convId.startsWith('dm:')) { to = [convId.slice(3)]; wire = 'dm'; } // a private chat needs no stored conversation yet
+    else {
+      const conv = this.store.conv(convId);
+      if (!conv || conv.left_group || conv.type !== 'group') return; // not in the Everyone channel: that would ping the whole team
+      to = this.recipientsOf(conv); wire = conv.id;
+    }
+    for (const r of to) if (this.isOnline(this.peers.get(r))) this.sendJson(r, { t: 'typing', conv: wire, sub: sub || undefined });
+  }
+  onTyping(from, f) {
+    let convId;
+    if (f.conv === 'dm') convId = 'dm:' + from;
+    else { const conv = this.store.conv(String(f.conv)); if (!conv || conv.type !== 'group' || conv.left_group || !this.inChat(conv, from)) return; convId = conv.id; }
+    this.ev('typing', { conv: convId, from, sub: typeof f.sub === 'string' ? f.sub.slice(0, 12) : '' });
+  }
+
   endDownload(d, error) {
     if (!this.downloads.delete(d.xid)) return;
     clearInterval(d.watch);
@@ -999,6 +1034,7 @@ class Messenger extends EventEmitter {
         const { bytesRead } = await fd.read(buf, 0, CHUNK, pos);
         if (!bytesRead) throw new Error('short read');
         head.writeUInt32BE(seq++, 9);
+        if (this.stopSending && this.stopSending.delete(xid)) return; // the receiver cancelled the download
         if (!(await this.sendRaw(from, Buffer.concat([head, buf.subarray(0, bytesRead)])))) return;
         pos += bytesRead;
       }

@@ -213,6 +213,34 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   assert.equal(fs.readFileSync(path.join(chosen, 'project (2)', 'a.txt'), 'utf8'), 'A');
   ok('download all: a folder lands in the chosen place with its structure, without overwriting');
 
+  // cancel a download half way: the partial file is removed, the sender stops, and it can be downloaded again
+  const bigC = path.join(tmp, 'huge.bin'); fs.writeFileSync(bigC, crypto.randomBytes(40 * 1024 * 1024));
+  const cm = await A.send({ conv: 'dm:' + C.me.id, paths: [bigC] });
+  const cfile = await until('big file offer', () => C.store.filesOf(cm.id)[0]);
+  const cancelEvents = []; C.on('event', (e, d) => { if (e === 'file' && d.fid === cfile.fid) cancelEvents.push(d); });
+  const cTarget = path.join(tmp, 'Chen', 'cancel me.bin');
+  await C.download(cfile.fid, cTarget);
+  await until('some of it arrived', () => cancelEvents.some((d) => d.state === 'downloading' && d.progress > 0.02), 20000);
+  assert.equal(C.cancelDownload(cfile.fid), true);
+  await until('cancelled', () => cancelEvents.some((d) => d.error === 'Download cancelled'));
+  await sleep(300);
+  assert.ok(!fs.existsSync(cTarget) && !fs.existsSync(cTarget + '.part') && C.store.file(cfile.fid).state === 'remote' && C.downloads.size === 0);
+  assert.equal(C.cancelDownload(cfile.fid), false); // nothing left to cancel
+  await C.download(cfile.fid, cTarget);
+  await until('second try completes', () => C.store.file(cfile.fid).state === 'done', 40000);
+  assert.equal(sha(cTarget), sha(bigC));
+  ok('a download can be cancelled half way (partial file removed, sender stops) and started again');
+
+  // typing hint: reaches the other person in a private chat and the members of a group, never the Everyone channel
+  const typed = []; const listen = (m, tag) => m.on('event', (e, d) => { if (e === 'typing') typed.push(tag + ':' + d.conv + ':' + d.from.slice(0, 4)); });
+  listen(A, 'A'); listen(B, 'B'); listen(C, 'C');
+  B.typing({ conv: 'dm:' + A.me.id }); B.typing({ conv: g.id }); B.typing({ conv: 'all' });
+  await until('typing hints', () => typed.length >= 2);
+  await sleep(250);
+  assert.deepEqual(typed.sort(), ['A:' + g.id + ':' + B.me.id.slice(0, 4), 'A:dm:' + B.me.id + ':' + B.me.id.slice(0, 4)].sort());
+  assert.equal(A.store.pendingFor(B.me.id).filter((r) => r.frame.t === 'typing').length + B.store.pendingFor(A.me.id).filter((r) => r.frame.t === 'typing').length, 0); // never queued
+  ok('typing hint reaches the chat\'s members only, is never queued, and is not sent to Everyone');
+
   // forwarding: text + attachment go to another person and a group; sealed messages cannot be forwarded
   const src = msgs(B, 'dm:' + A.me.id).find((m) => m.id === im.id);
   assert.equal(await B.forward({ id: src.id, convs: ['dm:' + C.me.id] }), 1);

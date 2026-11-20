@@ -169,6 +169,8 @@ function startServer(messenger, { port = 0, token } = {}) {
     downloadAll: (p) => messenger.downloadAll(String(p.msg), p.dir ? String(p.dir) : undefined),
     forward: (p) => messenger.forward({ id: p.id, convs: p.convs }),
     saveCopy: (p) => messenger.saveCopy(String(p.fid), String(p.saveAs || '')),
+    cancelDownload: (p) => messenger.cancelDownload(String(p.fid)),
+    typing: (p) => messenger.typing({ conv: p.conv, sub: p.sub }),
     download: (p) => messenger.download(String(p.fid), p.saveAs ? String(p.saveAs) : undefined),
     search: (p) => messenger.search(p),
     createGroup: (p) => messenger.createGroup(p),
