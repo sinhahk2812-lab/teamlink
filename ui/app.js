@@ -1210,20 +1210,29 @@ function updateText() {
     case 'downloading': return `${v} · downloading ${upd.version} (${upd.percent}%)`;
     case 'ready': return `${v} · ${upd.version} is ready to install`;
     case 'available': return `${v} · ${upd.version} is available`;
-    case 'error': return v + ' · could not check for updates: ' + upd.error;
-    default: return v;
+    case 'error': return v + (upd.latest ? ` · ${upd.latest} is available, but automatic update failed: ` : ' · could not check for updates: ') + upd.error;
+    default: return v + (upd.latest ? ` · ${upd.latest} is available` : '');
   }
+}
+// The notice above the search box, and the red dot on the Settings button, whenever a newer version exists.
+function updateNewer() {
+  if (!upd) return '';
+  if (upd.status === 'ready' || upd.status === 'downloading' || upd.status === 'available') return upd.version || upd.latest;
+  return upd.latest || '';
 }
 function renderUpdate() {
   if (updLine) updLine.textContent = updateText();
-  const b = $('updateBanner');
-  const action = upd && (upd.status === 'ready' || upd.status === 'available');
-  b.hidden = !(upd && (action || upd.status === 'downloading'));
-  b.classList.toggle('action', !!action);
-  if (!upd) return;
-  b.textContent = upd.status === 'ready' ? `TeamLink ${upd.version} is ready. Click to restart and update.`
-    : upd.status === 'available' ? `TeamLink ${upd.version} is available. Click to download it.`
-      : `Downloading update ${upd.version}… ${upd.percent}%`;
+  const b = $('updateBanner'), v = updateNewer();
+  b.hidden = !v;
+  $('settingsBtn').classList.toggle('has-update', !!v);
+  $('settingsBtn').title = v ? `Settings · update ${v} available` : 'Settings';
+  if (!v) return;
+  const busy = upd.status === 'downloading';
+  b.classList.toggle('action', !busy);
+  b.replaceChildren(h('span', { class: 'up-ico' }, busy ? '⬇' : '🎉'),
+    h('span', { class: 'up-text' }, h('b', null, upd.status === 'ready' ? `Update ${v} is ready` : busy ? `Downloading update ${v}` : `Update ${v} available`),
+      h('small', null, upd.status === 'ready' ? 'Click to restart and update' : busy ? `${upd.percent}% done` : upd.canSelfInstall ? `You have ${upd.current}. Click to update.` : `You have ${upd.current}. Click to download.`)),
+    busy ? h('span', { class: 'up-bar' }, Object.assign(h('i'), { style: `width:${upd.percent}%` })) : h('span', { class: 'up-go' }, '→'));
 }
 function updateRow() {
   updLine = h('p', { class: 'hint' }, updateText());
@@ -1234,7 +1243,7 @@ if (desk && desk.onOpenSend) desk.onOpenSend(() => { if (S.me && S.me.config.tea
 if (desk && desk.getUpdate) {
   desk.getUpdate().then((u) => { upd = u; renderUpdate(); });
   desk.onUpdate((u) => { upd = u; renderUpdate(); });
-  $('updateBanner').addEventListener('click', () => { if (upd && (upd.status === 'ready' || upd.status === 'available')) desk.installUpdate(); });
+  $('updateBanner').addEventListener('click', () => { if (updateNewer() && upd.status !== 'downloading') { desk.installUpdate(); if (upd.status !== 'ready') toast('Getting the update…'); } });
 }
 
 // ---------------------------------------------------------------- notifications

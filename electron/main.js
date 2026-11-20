@@ -1,6 +1,6 @@
 'use strict';
 // Desktop shell: starts the engine in this process and shows its UI in a window, with a tray icon.
-const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen, nativeTheme } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen, nativeTheme, net } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { Messenger } = require('../core/messenger');
@@ -327,14 +327,39 @@ app.on('window-all-closed', () => {});
 const RELEASES = 'https://github.com/sinhahk2812-lab/teamlink/releases/latest';
 const canSelfInstall = process.platform !== 'darwin';
 let updater = null;
-const update = { current: app.getVersion(), status: app.isPackaged ? 'idle' : 'dev', version: '', percent: 0, error: '', canSelfInstall };
+const update = { current: app.getVersion(), status: app.isPackaged ? 'idle' : 'dev', version: '', percent: 0, error: '', canSelfInstall, latest: '' };
 
 function setUpdate(patch) {
   Object.assign(update, patch);
   if (win && !win.isDestroyed()) win.webContents.send('update', update);
 }
 
+// "Is there a newer release?" is asked separately from the self-updater, so the app can say "update available"
+// even where the automatic download does not work (a blocked download, macOS, an old installer).
+// It reads where github.com/.../releases/latest redirects to; nothing about the user is sent.
+const newer = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+async function checkLatest() {
+  try {
+    let latest = !app.isPackaged && process.env.TEAMLINK_TEST_LATEST; // lets the notice be tested from source
+    if (!latest) {
+      // /releases/latest answers with a redirect to /releases/tag/v<version>; only that address is needed.
+      const target = await new Promise((resolve) => {
+        const rq = net.request({ url: RELEASES, method: 'HEAD', redirect: 'manual' });
+        rq.on('redirect', (status, method, url) => { resolve(url); rq.abort(); });
+        rq.on('response', () => resolve(''));
+        rq.on('error', () => resolve(''));
+        setTimeout(() => resolve(''), 15000);
+        rq.end();
+      });
+      latest = (/\/tag\/v?(\d+\.\d+\.\d+)$/.exec(target) || [])[1];
+    }
+    if (latest && newer(latest, update.current) && latest !== update.latest) setUpdate({ latest });
+  } catch {}
+}
+
 function setupUpdates() {
+  setTimeout(checkLatest, 8000);
+  setInterval(checkLatest, 2 * 3600 * 1000);
   if (!app.isPackaged) return;
   try { updater = require('electron-updater').autoUpdater; } catch (e) { return setUpdate({ status: 'error', error: e.message }); }
   updater.autoDownload = canSelfInstall;
@@ -371,11 +396,14 @@ function installUpdate(comeBackHidden) {
 
 ipcMain.handle('getUpdate', () => update);
 ipcMain.handle('checkUpdate', (e) => {
-  if (fromUi(e)) checkNow();
+  if (fromUi(e)) { checkNow(); checkLatest(); }
   return update;
 });
 ipcMain.handle('installUpdate', (e) => {
   if (!fromUi(e)) return;
-  if (update.status === 'available') shell.openExternal(RELEASES);
-  else installUpdate(false);
+  if (update.status === 'ready') return installUpdate(false);
+  if (update.status === 'downloading') return;
+  // Not downloaded yet: start the self-updater where it can work; if it cannot (or fails), open the download page.
+  if (updater && canSelfInstall && update.status !== 'error') { checkNow(); setTimeout(() => { if (update.status === 'error') shell.openExternal(RELEASES); }, 6000); }
+  else shell.openExternal(RELEASES);
 });
