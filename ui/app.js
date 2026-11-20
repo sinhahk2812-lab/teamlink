@@ -253,6 +253,7 @@ function renderNet() {
 }
 
 function renderSide() {
+  if (document.body.classList.contains('dragging')) { S.sideStale = true; return; } // keep the rows still while a file is dragged over them
   const searching = S.results !== null;
   $('chatSection').hidden = searching;
   $('peerList').parentElement.hidden = searching;
@@ -266,7 +267,7 @@ function renderSide() {
     let sub = last ? last.preview : c.type === 'all' ? 'Announcements for the whole team' : c.left ? 'You left this group' : `${c.members.length} members`;
     if (last && c.type !== 'dm') sub = (last.sender === S.me.id ? 'You' : memberName(c, last.sender).split(' ')[0]) + ': ' + sub;
     else if (last && last.sender === S.me.id) sub = 'You: ' + sub;
-    return recent(pingAt, c.id, 1300, h('li', { class: 'item' + (c.id === S.active ? ' active' : ''), onclick: () => openConv(c.id) },
+    return recent(pingAt, c.id, 1300, h('li', { class: 'item' + (c.id === S.active ? ' active' : ''), 'data-conv': c.id, onclick: () => openConv(c.id) },
       avatar(c.type === 'dm' ? c.id.slice(3) : c.id, c.type === 'all' ? '📢' : convName(c), dm ? dotOf(dm) : null),
       h('div', { class: 'body' },
         h('div', { class: 'top' }, h('span', { class: 'name' }, convName(c)), last && h('span', { class: 'time' }, fmtWhen(last.ts))),
@@ -287,7 +288,7 @@ function renderSide() {
     for (const p of groups.get(k)) {
       const sub = !p.online ? (p.lastSeen ? 'Last seen ' + fmtWhen(p.lastSeen) : 'Offline')
         : (p.status === 'away' ? 'Away' + (p.absenceMsg ? ' · ' + p.absenceMsg : '') : p.host) + (p.via === 'relay' ? ' · remote' : '');
-      nodes.push(h('li', { class: 'item' + (p.online ? '' : ' offline') + (S.active === 'dm:' + p.id ? ' active' : ''), onclick: () => openConv('dm:' + p.id) },
+      nodes.push(h('li', { class: 'item' + (p.online ? '' : ' offline') + (S.active === 'dm:' + p.id ? ' active' : ''), 'data-conv': 'dm:' + p.id, onclick: () => openConv('dm:' + p.id) },
         avatar(p.id, p.name, dotOf(p)),
         h('div', { class: 'body' }, h('div', { class: 'top' }, h('span', { class: 'name' }, p.name)), h('div', { class: 'sub' }, sub))));
     }
@@ -964,16 +965,53 @@ document.addEventListener('paste', (e) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
   addFiles(files.map((f, i) => (f.name && f.name !== 'image.png' ? f : new File([f], `screenshot-${stamp}${i ? '-' + i : ''}.png`, { type: f.type }))));
 });
-let dragDepth = 0;
-const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
-window.addEventListener('dragenter', (e) => { if (hasFiles(e) && S.active) { dragDepth++; $('dropHint').hidden = false; } });
-window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('dropHint').hidden = true; } });
-window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
-window.addEventListener('drop', (e) => {
+// ---------------------------------------------------------------- drag and drop of files
+// * Drop on a chat in the list: that chat opens and the files are attached there.
+// * Drop anywhere else: the files are attached to the chat that is open.
+// The "being dragged" state is not counted with enter/leave events (the list is redrawn while people come online,
+// and a removed row never reports "leave", which left the hint stuck on screen). Instead every dragover renews a
+// short timer: when the drag stops, leaves the window or is dropped, the hint goes away by itself.
+const hasFiles = (e) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+let dragTimer = null, dragRow = null;
+function dragEnd() {
+  clearTimeout(dragTimer); dragTimer = null;
+  document.body.classList.remove('dragging');
+  $('dropHint').hidden = true;
+  if (dragRow) { dragRow.classList.remove('drop-target'); dragRow = null; }
+  if (S.sideStale) { S.sideStale = false; renderSide(); } // the list was held still during the drag
+}
+function dragMove(e) {
   if (!hasFiles(e)) return;
-  e.preventDefault(); dragDepth = 0; $('dropHint').hidden = true;
-  if (S.active) addFiles([...e.dataTransfer.files]);
-});
+  e.preventDefault(); // tells the system this window accepts the drop
+  try { e.dataTransfer.dropEffect = 'copy'; } catch {}
+  document.body.classList.add('dragging');
+  const row = e.target && e.target.closest ? e.target.closest('#lists [data-conv]') : null;
+  if (row !== dragRow) { if (dragRow) dragRow.classList.remove('drop-target'); dragRow = row; if (row) row.classList.add('drop-target'); }
+  const hint = $('dropHint');
+  hint.hidden = !S.active || !!row;
+  if (!hint.hidden) hint.textContent = 'Drop files to attach';
+  clearTimeout(dragTimer);
+  dragTimer = setTimeout(dragEnd, 350); // no dragover for a moment = the drag is over or left the window
+}
+document.addEventListener('dragenter', dragMove, true);
+document.addEventListener('dragover', dragMove, true);
+document.addEventListener('dragleave', (e) => { if (!e.relatedTarget && (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight)) dragEnd(); }, true);
+window.addEventListener('blur', () => { if (dragTimer) dragEnd(); });
+document.addEventListener('drop', async (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  const files = [...e.dataTransfer.files];
+  const row = e.target && e.target.closest ? e.target.closest('#lists [data-conv]') : null;
+  const conv = row ? row.dataset.conv : null;
+  dragEnd();
+  if (!files.length) return;
+  if (conv && conv !== S.active) await openConv(conv); // dropped on a chat in the list: go there first
+  if (!S.active) return toast('Drop the file on a chat in the list, or open a chat first');
+  const c = S.convs.get(S.active);
+  if (c && c.left) return toast('You are no longer in this group');
+  addFiles(files);
+  $('input').focus();
+}, true);
 $('viewer').addEventListener('click', () => { $('viewer').hidden = true; });
 $('viewerSave').addEventListener('click', (e) => { e.stopPropagation(); if (viewing) saveImage(viewing).catch(() => {}); });
 $('backBtn').addEventListener('click', closeChat);
