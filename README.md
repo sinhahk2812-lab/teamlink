@@ -16,6 +16,7 @@ directly. People working from home can join through a small optional relay.
 | WhatsApp Intake | Per-member API endpoint and key for an agent to push work messages from WhatsApp groups; shared inbox with assignee, status, due date and comments (see `docs/whatsapp-intake.md`) |
 | Sub-chats | Named topics inside any chat, each with its own messages and unread count |
 | Backup and restore | One encrypted file with identity, settings and history; daily automatic backup |
+| Delete | Delete a message for yourself, or your own message for everyone |
 | Mentions | In groups, type @ to tag a member or @all; they get a highlighted message, an @ badge and a popup |
 | Group chats | Any member can rename the group, add or remove people, or leave |
 | Everyone channel | Broadcast to the whole team (IP Messenger's "broadcast") |

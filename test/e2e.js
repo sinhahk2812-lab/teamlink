@@ -205,6 +205,35 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await assert.rejects(B.forward({ id: s1.id, convs: ['dm:' + C.me.id] }), /cannot be forwarded/);
   ok('forward a message with its attachment; sealed messages are refused');
 
+  // delete for everyone / delete for me
+  const dPng = path.join(tmp, 'secret.png'); fs.writeFileSync(dPng, crypto.randomBytes(20000));
+  const dm1 = await B.send({ conv: g.id, text: 'wrong price 4500, ignore', paths: [dPng] });
+  await until('to be deleted arrives', () => msgs(A, g.id).some((m) => m.id === dm1.id) && A.store.filesOf(dm1.id)[0]?.state === 'done');
+  const cachedA = A.store.filesOf(dm1.id)[0].path;
+  assert.throws(() => A.deleteMessage({ id: dm1.id, everyone: true }), /only delete your own/);
+  B.deleteMessage({ id: dm1.id, everyone: true });
+  await until('deleted on A', () => msgs(A, g.id).find((m) => m.id === dm1.id).deleted);
+  for (const m of [A, B]) {
+    const v = msgs(m, g.id).find((x) => x.id === dm1.id);
+    assert.deepEqual([v.deleted, v.body, v.files.length], [true, '', 0]);
+    assert.equal(m.search({ text: 'wrong price' }).length, 0);
+    assert.ok(!JSON.stringify(m.getState().convs).includes('4500'));
+  }
+  await until('auto-fetched picture removed', () => !fs.existsSync(cachedA));
+  // a delete that arrives before its message (forged order): the message shows up already deleted
+  const lateId = 'ab'.repeat(12);
+  B.sendJson(A.me.id, { t: 'del', id: 'del:' + lateId, mid: lateId });
+  await until('tomb stored', () => A.store.hasTomb(lateId, B.me.id));
+  B.sendJson(A.me.id, { t: 'msg', id: lateId, conv: g.id, ts: Date.now(), body: 'should never be readable' });
+  await until('late message arrives deleted', () => msgs(A, g.id).some((m) => m.id === lateId && m.deleted && m.body === ''));
+  // delete for me: only my copy goes
+  const dm2 = await B.send({ conv: g.id, text: 'keep this on B' });
+  await until('dm2 arrives', () => msgs(A, g.id).some((m) => m.id === dm2.id));
+  A.deleteMessage({ id: dm2.id, everyone: false });
+  await sleep(200);
+  assert.ok(!msgs(A, g.id).some((m) => m.id === dm2.id) && msgs(B, g.id).some((m) => m.id === dm2.id && !m.deleted));
+  ok('delete for everyone empties the message and files on every computer; delete for me removes only my copy');
+
   // sub-chats: a named topic inside a conversation, shared by both sides
   const sub = A.createSub({ conv: 'dm:' + B.me.id, name: 'Invoices' });
   await until('sub-chat sync', () => B.getState().convs.find((c) => c.id === 'dm:' + A.me.id).subs.some((x) => x.id === sub.id && x.name === 'Invoices'));

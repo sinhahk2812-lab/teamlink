@@ -442,3 +442,7 @@ body[data-motion="on"].theming, body[data-motion="on"].theming #side, body[data-
 body[data-style="glass"] #mentionPop { bottom: 84px; border: 1px solid var(--lg-rim); border-radius: 20px; background: var(--lg-sheen), color-mix(in srgb, var(--panel) 62%, transparent); -webkit-backdrop-filter: var(--lg-blur); backdrop-filter: var(--lg-blur); }
 body[data-style="glass"] .msg.tagged .bubble { box-shadow: 0 0 0 2px var(--accent), 0 8px 22px color-mix(in srgb, var(--accent) 30%, transparent); }
 body[data-motion="on"] #mentionPop:not([hidden]) { animation: growIn .14s ease-out; transform-origin: 20px 100%; }
+
+/* deleted for everyone */
+.bubble.gone, body[data-style="glass"] .bubble.gone, body[data-style="glass"] .msg.mine .bubble.gone { font-style: italic; color: var(--dim); background: color-mix(in srgb, var(--text) 6%, transparent); border: 1px dashed var(--line); box-shadow: none; }
+.bubble.gone .stamp { color: var(--dim) !important; }

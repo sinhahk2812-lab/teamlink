@@ -101,6 +101,7 @@ function onEvent(event, d) {
   else if (event === 'net') { S.net = d; renderNet(); }
   else if (event === 'message') onMessage(d);
   else if (event === 'file') onFile(d);
+  else if (event === 'messageGone') { if (d.conv === S.active) { S.msgs = S.msgs.filter((x) => x.id !== d.id); renderMessages(false); } }
   else if ((event === 'intake' || event === 'intakeAlert') && typeof intakeEvent === 'function') intakeEvent(event, d); // WHATSAPP-INTAKE
   else if (event === 'incoming') { pingAt.set(d.conv, Date.now()); renderSide(); notify(d); }
   else if (event === 'opened') toast(`${peerName(d.by)} opened your sealed message`);
@@ -510,7 +511,10 @@ function msgNode(m, c, showWho) {
   const bubble = h('div', { class: 'bubble' });
   // one to three emoji and nothing else: show them big, without a bubble
   if (!m.hidden && !m.files.length && !m.quote && !m.sealed && /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f|\s)+$/u.test(m.body) && [...m.body.matchAll(/\p{Extended_Pictographic}/gu)].length <= 3 && /\p{Extended_Pictographic}/u.test(m.body)) bubble.classList.add('jumbo');
-  if (m.hidden) {
+  if (m.deleted) {
+    bubble.classList.add('gone');
+    bubble.append('🚫 ' + (m.mine ? 'You deleted this message' : 'This message was deleted'));
+  } else if (m.hidden) {
     // Secret until opened, and secret again a minute later. A locked one asks for the password every time
     // (for my own locked messages only if I have a lock password).
     const needsPassword = m.locked && (!m.mine || S.me.hasLock);
@@ -539,9 +543,10 @@ function msgNode(m, c, showWho) {
     else detail = `Delivered to ${m.delivered} of ${m.recipients}` + (m.seen ? ` · Seen by ${m.seen}` : '');
   }
   bubble.append(h('span', { class: 'stamp', title: detail, onclick: () => toast(detail) }, fmtTime(m.ts), ticks));
-  const acts = !m.hidden && !m.sealed && h('div', { class: 'acts' },
+  const delBtn = h('button', { title: 'Delete', onclick: () => deleteDialog(m) }, '🗑');
+  const acts = m.deleted || m.hidden || m.sealed ? h('div', { class: 'acts' }, delBtn) : h('div', { class: 'acts' },
     !c.left && h('button', { title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩'),
-    h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'));
+    h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'), delBtn);
   return freshClass(m, h('div', { class: 'msg' + (m.mine ? ' mine' : '') + (m.mentionsMe ? ' tagged' : ''), 'data-id': m.id },
     showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts)));
 }
@@ -568,6 +573,15 @@ function forwardDialog(m) {
     const n = await call('forward', { id: m.id, convs });
     toast(`Forwarded to ${n} ${n === 1 ? 'chat' : 'chats'}`);
   } });
+}
+
+// Delete a message: for me only, or (my own messages) for everyone in the chat.
+function deleteDialog(m) {
+  const forEveryone = m.mine && !m.deleted && h('button', { class: 'ghost danger', type: 'button', onclick: async () => { await call('deleteMessage', { id: m.id, everyone: true }); $('modal').hidden = true; } }, 'Delete for everyone');
+  modal('Delete message?', [
+    h('p', { class: 'hint' }, forEveryone ? '"Delete for everyone" removes the text and files from every member\'s chat and leaves a "message deleted" note. It cannot be undone. Someone who is offline gets it removed when they come back.'
+      : 'This removes the message from this computer only.'),
+  ], { label: 'Delete for me', danger: true, run: () => call('deleteMessage', { id: m.id, everyone: false }) }, forEveryone);
 }
 
 function jumpTo(id) {

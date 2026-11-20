@@ -341,7 +341,7 @@ class Messenger extends EventEmitter {
     let f;
     try { f = JSON.parse(plain.subarray(1).toString()); } catch { return; }
     try {
-      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub }[f.t];
+      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete }[f.t];
       if (handler) handler.call(this, from, f);
       else this.intake.onFrame(from, f); // WHATSAPP-INTAKE
     } catch (e) {
@@ -433,6 +433,42 @@ class Messenger extends EventEmitter {
     }
   }
 
+  // ---- deleting messages
+  // everyone = true: only for my own message; it is emptied here and on every recipient's computer.
+  // everyone = false: removes the message from this computer only.
+  deleteMessage({ id, everyone }) {
+    const m = this.store.message(String(id));
+    if (!m) throw new Error('Unknown message');
+    if (!everyone) {
+      this.store.removeMessage(m.id);
+      this.ev('messageGone', { id: m.id, conv: m.conv });
+    } else {
+      if (m.sender !== this.me.id) throw new Error('You can only delete your own messages for everyone');
+      if (m.deleted) return;
+      const paths = this.store.filesOf(m.id).map((f) => f.path).filter((p) => p && p.startsWith(path.join(this.dataDir, 'outgoing')));
+      this.store.tombstone(m.id);
+      for (const p of paths) fs.rm(path.dirname(p), { recursive: true, force: true }, () => {}); // pasted/uploaded copies kept for sending
+      for (const r of m.recipients) this.deliver(r, { t: 'del', id: 'del:' + m.id, mid: m.id });
+      this.ev('message', this.msgView(this.store.message(m.id)));
+    }
+    const conv = this.store.conv(m.conv);
+    if (conv) this.ev('conv', this.convView(conv));
+  }
+
+  onDelete(from, f) {
+    this.ack(from, f.id);
+    const mid = String(f.mid || '').slice(0, 64);
+    const m = this.store.message(mid);
+    if (!m) return this.store.addTomb(mid, from); // the message has not arrived yet (or was removed here): remember the delete
+    if (m.sender !== from || m.deleted) return; // only the author can delete it for everyone
+    if (this.revealed && this.revealed.has(mid)) this.hideSealed(mid);
+    for (const file of this.store.filesOf(mid)) if (file.path && file.path.startsWith(path.join(this.dataDir, 'files'))) fs.rm(file.path, { force: true }, () => {}); // auto-fetched pictures
+    this.store.tombstone(mid);
+    this.ev('message', this.msgView(this.store.message(mid)));
+    const conv = this.store.conv(m.conv);
+    if (conv) this.ev('conv', this.convView(conv));
+  }
+
   // Which local conversation a frame from `from` belongs to ('dm', 'all' or a group id on the wire).
   convFromWire(from, wire) {
     if (wire === 'dm') return this.ensureDm(from);
@@ -495,6 +531,7 @@ class Messenger extends EventEmitter {
       locked: sealed && !!f.locked, quote, fwd: !!f.fwd, sub: subId, mentions: tags, auto: !!f.auto, unread: 1 });
     this.ack(from, f.id);
     if (!fresh) return;
+    if (this.store.hasTomb(f.id, from)) { this.store.tombstone(f.id); return this.ev('message', this.msgView(this.store.message(f.id))); } // it was deleted before it got here
     for (const x of files) {
       if (typeof x.fid !== 'string' || !/^[0-9a-f]{8,64}$/.test(x.fid) || this.store.file(x.fid)) continue;
       const mime = Object.values(IMAGE_MIME).includes(x.mime) ? x.mime : '';
@@ -618,14 +655,15 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, sub: m.sub || '', mentions: m.mentions, mentionsMe: m.sender !== this.me.id && (m.mentions.includes(this.me.id) || m.mentions.includes('all')), quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, deleted: !!m.deleted, sub: m.sub || '', mentions: m.mentions, mentionsMe: m.sender !== this.me.id && (m.mentions.includes(this.me.id) || m.mentions.includes('all')), quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {
     const last = this.store.lastMessage(c.id);
     let preview = '';
     if (last) {
-      if (last.sealed) preview = last.locked ? '🔑 Locked message' : '🔒 Sealed message'; // never the text, for either side
+      if (last.deleted) preview = '🚫 Message deleted';
+      else if (last.sealed) preview = last.locked ? '🔑 Locked message' : '🔒 Sealed message'; // never the text, for either side
       else preview = last.body.trim().slice(0, 80) || (this.store.filesOf(last.id).length ? 'Attachment' : '');
     }
     return { id: c.id, type: c.type, name: c.name, members: c.members.map((m) => ({ id: m.id, name: m.name })), left: !!c.left_group,

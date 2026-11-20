@@ -34,6 +34,9 @@ class Store {
     // 1.6.0: sub-chats (named topics inside a conversation)
     try { this.db.exec('ALTER TABLE messages ADD COLUMN sub TEXT'); } catch {}
     try { this.db.exec('ALTER TABLE messages ADD COLUMN mentions TEXT'); } catch {} // 1.10.0: @mentions in groups
+    // 1.11.0: delete for everyone. "tombs" remembers a delete that arrives before its message.
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN deleted INTEGER DEFAULT 0'); } catch {}
+    this.db.exec('CREATE TABLE IF NOT EXISTS tombs(id TEXT NOT NULL, sender TEXT NOT NULL, ts INTEGER, PRIMARY KEY(id, sender))');
     this.db.exec('CREATE TABLE IF NOT EXISTS subs(conv TEXT NOT NULL, id TEXT NOT NULL, name TEXT, created INTEGER, PRIMARY KEY(conv, id))');
     try { this.db.exec('ALTER TABLE messages ADD COLUMN locked INTEGER DEFAULT 0'); } catch {}
     this._stmts = new Map();
@@ -115,6 +118,15 @@ class Store {
     this.run('UPDATE messages SET sub=NULL WHERE conv=? AND sub=?', conv, id);
     this.run('DELETE FROM subs WHERE conv=? AND id=?', conv, id);
   }
+  // "Delete for everyone": the row stays as an empty marker so the chat shows that something was removed.
+  tombstone(id) {
+    this.run('DELETE FROM files WHERE msg=?', id);
+    this.run("UPDATE messages SET body='', quote=NULL, mentions=NULL, sealed=0, locked=0, fwd=0, unread=0, deleted=1 WHERE id=?", id);
+  }
+  // "Delete for me": gone from this computer only.
+  removeMessage(id) { this.run('DELETE FROM files WHERE msg=?', id); this.run('DELETE FROM messages WHERE id=?', id); }
+  addTomb(id, sender) { this.run('INSERT OR IGNORE INTO tombs(id, sender, ts) VALUES(?,?,?)', id, sender, Date.now()); }
+  hasTomb(id, sender) { return !!this.get('SELECT 1 x FROM tombs WHERE id=? AND sender=?', id, sender); }
   // unread messages in this chat that tag me (or @all)
   unreadMentions(conv, me) { return this.get(`SELECT COUNT(*) n FROM messages WHERE conv=? AND unread=1 AND (mentions LIKE ? OR mentions LIKE '%"all"%')`, conv, `%"${me}"%`).n; }
   unreadMain(conv) { return this.get('SELECT COUNT(*) n FROM messages WHERE conv=? AND unread=1 AND sub IS NULL', conv).n; }
