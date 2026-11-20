@@ -16,6 +16,8 @@ directly. People working from home can join through a small optional relay.
 | WhatsApp Intake | Per-member API endpoint and key for an agent to push work messages from WhatsApp groups; shared inbox with assignee, status, due date and comments (see `docs/whatsapp-intake.md`) |
 | Sub-chats | Named topics inside any chat, each with its own messages and unread count |
 | Backup and restore | One encrypted file with identity, settings and history; daily automatic backup |
+| Message menu | Right-click a message: react, reply, reply privately, copy, forward, edit, pin, star, select several, delete |
+| Group admins | Only a group's admins can rename it or add and remove members; up to 256 members |
 | Reactions | React to a message with an emoji; everyone in the chat sees it |
 | Delete | Delete a message for yourself, or your own message for everyone |
 | Mentions | In groups, type @ to tag a member or @all; they get a highlighted message, an @ badge and a popup |

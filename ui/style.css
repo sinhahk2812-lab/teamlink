@@ -483,3 +483,48 @@ body[data-motion="on"] #settingsBtn.has-update::after { animation: updot 1.8s ea
 body[data-motion="on"] #updateBanner:not([hidden]) { animation: fadeUp .3s ease-out; }
 body[data-motion="on"] #updateBanner.action:hover .up-go { transform: translateX(3px); }
 #updateBanner .up-go { transition: transform .15s; }
+
+/* ---------- message menu ---------- */
+#msgMenu { position: fixed; z-index: 35; width: 250px; display: flex; flex-direction: column; gap: 6px; }
+.mreact, .mlist { background: var(--panel); border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(0,0,0,.4); }
+.mreact { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: 999px; }
+.mreact button { border: 0; background: none; font-size: 21px; line-height: 1; padding: 5px; border-radius: 50%; cursor: pointer; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+.mreact button:hover, .mreact button.on { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.mreact .plus { font-size: 17px; color: var(--dim); width: 32px; }
+.mlist { border-radius: 16px; padding: 6px; display: flex; flex-direction: column; }
+.mi { display: flex; align-items: center; gap: 12px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; padding: 8px 10px; border-radius: 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mi span { width: 20px; text-align: center; flex: none; }
+.mi:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.mi.danger { color: #ef4444; }
+.mlist hr { border: 0; border-top: 1px solid var(--line); margin: 4px 6px; width: auto; }
+body[data-style="glass"] .mreact, body[data-style="glass"] .mlist { border: 1px solid var(--lg-rim); background: var(--lg-sheen), color-mix(in srgb, var(--panel) 68%, transparent); -webkit-backdrop-filter: var(--lg-blur); backdrop-filter: var(--lg-blur); }
+body[data-style="glass"] .mlist { border-radius: 20px; }
+body[data-motion="on"] #msgMenu { animation: growIn .13s ease-out; transform-origin: 0 0; }
+body[data-motion="on"] .mreact button { transition: transform .12s; }
+body[data-motion="on"] .mreact button:hover { transform: scale(1.25) translateY(-2px); }
+#emojiPop.reacting::before { content: "Pick a reaction"; display: block; padding: 8px 14px 0; font-size: 12px; font-weight: 600; color: var(--accent); }
+/* ---------- pinned bar ---------- */
+#pinBar { display: flex; flex-direction: column; gap: 4px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex: none; }
+.pin { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; padding: 3px 8px; border-radius: 8px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.pin .ptext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.pin .ptext b { color: var(--text); }
+.pin button { border: 0; background: none; color: var(--dim); font-size: 15px; cursor: pointer; }
+body[data-style="glass"] #pinBar { background: none; border: 0; padding: 0 6px; }
+body[data-style="glass"] .pin { border: 1px solid var(--lg-rim); border-left: 3px solid var(--accent); border-radius: 14px; background: var(--lg-sheen), var(--lg-fill); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); padding: 5px 10px; }
+/* ---------- select mode ---------- */
+#selBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--line); }
+#messages.picking .msg { cursor: pointer; position: relative; padding-left: 30px; }
+#messages.picking .acts { display: none; }
+.msg .tick { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--dim); display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; }
+.msg.picked .tick { background: var(--accent); border-color: var(--accent); }
+.msg.picked { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 12px; }
+body[data-style="glass"] #selBar { border: 1px solid var(--lg-rim); border-radius: 30px; box-shadow: var(--lg-shadow); background: var(--lg-sheen), var(--lg-fill); -webkit-backdrop-filter: var(--lg-blur); backdrop-filter: var(--lg-blur); }
+/* ---------- starred, results header, group admin rows ---------- */
+#starNav { padding: 0 6px 2px; }
+#starBtn { width: 100%; border: 1px solid transparent; background: none; color: inherit; text-align: left; font: inherit; margin: 1px 0; }
+#starBtn .name { font-weight: 600; }
+body[data-style="glass"] #starBtn { border-radius: 18px; }
+#resultClose { float: right; border: 0; background: none; color: var(--accent); font: inherit; font-size: 11px; letter-spacing: 0; text-transform: none; cursor: pointer; padding: 0; }
+.grow { display: flex; align-items: center; }
+.grow > label:first-child { flex: 1; min-width: 0; }
+.grow .gadmin { flex: none; font-size: 12px; color: var(--dim); padding-right: 10px !important; }

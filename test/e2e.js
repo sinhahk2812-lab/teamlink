@@ -149,7 +149,25 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   A.updateGroup({ conv: g.id, name: 'Design Team', members: [B.me.id] });
   await until('group update', () => B.store.conv(g.id).name === 'Design Team' && C.store.conv(g.id).left_group === 1);
   await assert.rejects(C.send({ conv: g.id, text: 'still here?' }));
-  ok('rename group and remove a member');
+  // group admins: the creator is admin; a plain member cannot rename the group or add people, but can leave
+  const ga = A.createGroup({ name: 'Admins only', members: [B.me.id] });
+  await until('ga synced', () => B.store.conv(ga.id));
+  const viewOf = (m) => m.getState().convs.find((c) => c.id === ga.id);
+  assert.ok(viewOf(A).canManage && !viewOf(B).canManage && viewOf(B).members.find((x) => x.id === A.me.id).admin);
+  assert.throws(() => B.updateGroup({ conv: ga.id, name: 'B was here' }), /Only a group admin/);
+  // even a forged frame from the plain member is refused by the others
+  const forged = B.store.conv(ga.id); forged.members.push({ ...B.memberInfo(C.me.id), admin: false });
+  B.sendJson(A.me.id, { t: 'group', id: 'gv:forged', gid: ga.id, name: 'Forged', members: forged.members, version: forged.version + 5 });
+  await sleep(250);
+  assert.deepEqual([A.store.conv(ga.id).name, A.store.conv(ga.id).members.length], ['Admins only', 2]);
+  A.updateGroup({ conv: ga.id, members: [B.me.id, C.me.id], admins: [B.me.id] }); // the admin adds C and makes B an admin too
+  await until('C added, B admin', () => C.store.conv(ga.id) && viewOf(B).canManage && viewOf(C).members.length === 3 && !viewOf(C).canManage);
+  B.updateGroup({ conv: ga.id, name: 'Renamed by B' });
+  await until('admin B renamed', () => A.store.conv(ga.id).name === 'Renamed by B');
+  C.leaveGroup(ga.id); // a plain member may still leave
+  await until('C left', () => A.store.conv(ga.id).members.length === 2);
+  assert.throws(() => A.createGroup({ name: 'too big', members: Array.from({ length: 300 }, (_, i) => String(i).padStart(20, '0')) }), /at most 256|Unknown member/);
+  ok('rename group and remove a member; only group admins can rename or add members, any member can leave');
 
   // broadcast
   await A.send({ conv: 'all', text: 'Office closed on Friday' });
@@ -223,6 +241,37 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   assert.equal(rv(A).length, 1);
   assert.throws(() => A.react({ id: s1.id, emoji: '👍' }), /Sealed/);
   ok('emoji reactions: add, replace and remove sync to the chat; outsiders and sealed messages are refused');
+
+  // pin (shared), star (personal), reply privately (quote a group message in the author's private chat)
+  const pinOf = (m) => m.getState().convs.find((c) => c.id === g.id).pins.map((p) => p.id);
+  A.pin({ id: rx.id, on: true });
+  await until('pin reaches B', () => pinOf(B)[0] === rx.id && msgs(B, g.id).find((m) => m.id === rx.id).pinned);
+  assert.deepEqual(pinOf(A), [rx.id]);
+  B.pin({ id: rx.id, on: false }); // anyone in the chat can unpin
+  await until('unpin reaches A', () => pinOf(A).length === 0 && !msgs(A, g.id).find((m) => m.id === rx.id).pinned);
+  assert.throws(() => A.pin({ id: s1.id, on: true }), /Sealed/);
+  A.star({ id: rx.id, on: true });
+  assert.ok(msgs(A, g.id).find((m) => m.id === rx.id).starred && A.starred().map((m) => m.id).includes(rx.id));
+  await sleep(200);
+  assert.ok(!msgs(B, g.id).find((m) => m.id === rx.id).starred && B.starred().length === 0); // a star is never shared
+  A.star({ id: rx.id, on: false });
+  assert.equal(A.starred().length, 0);
+  const pr = await A.send({ conv: 'dm:' + B.me.id, text: 'privately: looks great', replyTo: rx.id });
+  assert.deepEqual(pr.quote, { id: rx.id, sender: B.me.id, text: 'logo final ho gaya' });
+  assert.equal((await A.send({ conv: 'dm:' + C.me.id, text: 'not the author', replyTo: rx.id })).quote, null); // only into the author's own chat
+  ok('pin syncs to the chat, star stays personal, reply privately quotes a group message for its author only');
+
+  // edit my own message: everyone sees the new text, marked edited; nobody else can edit it
+  const ed = await B.send({ conv: g.id, text: 'meeting at 4' });
+  await until('ed arrives', () => msgs(A, g.id).some((m) => m.id === ed.id));
+  assert.throws(() => A.editMessage({ id: ed.id, text: 'hacked' }), /only edit your own/);
+  A.sendJson(B.me.id, { t: 'edit', id: 'edit:forced', mid: ed.id, body: 'hacked', ts: Date.now() + 5000 }); // a forged edit from a non-author
+  B.editMessage({ id: ed.id, text: 'meeting at 5' });
+  await until('edit reaches A', () => msgs(A, g.id).find((m) => m.id === ed.id).body === 'meeting at 5');
+  assert.ok(msgs(A, g.id).find((m) => m.id === ed.id).edited && msgs(B, g.id).find((m) => m.id === ed.id).body === 'meeting at 5');
+  assert.throws(() => B.editMessage({ id: ed.id, text: '   ' }), /cannot be empty/);
+  assert.equal(A.search({ text: 'meeting at 4' }).length, 0);
+  ok('edit: the author\'s new text replaces the old one for everyone; others cannot edit it');
 
   // delete for everyone / delete for me
   const dPng = path.join(tmp, 'secret.png'); fs.writeFileSync(dPng, crypto.randomBytes(20000));

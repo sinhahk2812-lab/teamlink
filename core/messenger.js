@@ -16,6 +16,7 @@ const { Intake } = require('./intake'); // WHATSAPP-INTAKE
 const HELLO_EVERY = 20000;
 const LAN_STALE = 70000;
 const CHUNK = 60 * 1024;
+const GROUP_MAX = 256;
 const REVEAL_MS = 60 * 1000; // how long an opened sealed message stays readable
 const AUTO_IMAGE_MAX = 10 * 1024 * 1024;
 const OUTBOX_TTL = 7 * 24 * 3600 * 1000;
@@ -348,7 +349,7 @@ class Messenger extends EventEmitter {
     let f;
     try { f = JSON.parse(plain.subarray(1).toString()); } catch { return; }
     try {
-      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete, react: this.onReact }[f.t];
+      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete, react: this.onReact, pin: this.onPin, edit: this.onEdit }[f.t];
       if (handler) handler.call(this, from, f);
       else this.intake.onFrame(from, f); // WHATSAPP-INTAKE
     } catch (e) {
@@ -395,7 +396,8 @@ class Messenger extends EventEmitter {
     const isSealed = (!!sealed || isLocked) && conv.type === 'dm';
     let quote = null;
     const q = replyTo ? this.store.message(String(replyTo)) : null;
-    if (q && q.conv === convId && !q.sealed) quote = { id: q.id, sender: q.sender, text: q.body.trim().slice(0, 200) || 'Attachment' };
+    // a quote comes from the same chat, or ("Reply privately") from a group message into the private chat with its author
+    if (q && !q.sealed && !q.deleted && (q.conv === convId || convId === 'dm:' + q.sender)) quote = { id: q.id, sender: q.sender, text: q.body.trim().slice(0, 200) || 'Attachment' };
     // @mentions (tags): only in groups and the Everyone channel, only people who are in the chat, or 'all'
     const tags = conv.type === 'dm' ? [] : [...new Set(Array.isArray(mentions) ? mentions : [])].filter((u) => u === 'all' || recipients.includes(u)).slice(0, 50);
     this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, sub: subInfo && subInfo.id, mentions: tags, opened: 1, auto, recipients });
@@ -470,11 +472,48 @@ class Messenger extends EventEmitter {
     const m = this.store.message(String(f.mid || ''));
     if (!m || m.deleted || m.sealed) return;
     const conv = this.store.conv(m.conv);
-    const inChat = conv && (conv.type === 'all' || (conv.type === 'dm' && conv.id === 'dm:' + from) || (conv.type === 'group' && conv.members.some((x) => x.id === from)));
-    if (!inChat) return;
+    if (!this.inChat(conv, from)) return;
     const emoji = [...String(f.emoji || '')].slice(0, 8).join('');
     if (this.setReaction(m, from, emoji, Math.min(Number(f.ts) || Date.now(), Date.now())) && emoji && m.sender === this.me.id) this.ev('reacted', { conv: m.conv, id: m.id, by: from, emoji });
   }
+
+  inChat(conv, user) {
+    return !!conv && (conv.type === 'all' || (conv.type === 'dm' && conv.id === 'dm:' + user) || (conv.type === 'group' && conv.members.some((x) => x.id === user)));
+  }
+
+  // ---- pinned messages: shared with everyone in the chat, newest three are shown on top
+  pin({ id, on }) {
+    const m = this.store.message(String(id));
+    if (!m || m.deleted) throw new Error('Unknown message');
+    if (m.sealed) throw new Error('Sealed messages cannot be pinned');
+    const conv = this.store.conv(m.conv);
+    if (!conv || conv.left_group) throw new Error('You are no longer in this chat');
+    const ts = Math.max(Date.now(), Math.abs(m.pinned || 0) + 1);
+    this.applyPin(m, on ? ts : -ts);
+    for (const r of this.recipientsOf(conv)) this.deliver(r, { t: 'pin', id: `pin:${m.id}`, mid: m.id, on: !!on, ts });
+  }
+  applyPin(m, value) {
+    if (Math.abs(value) <= Math.abs(m.pinned || 0)) return; // an older change that arrived late
+    this.store.run('UPDATE messages SET pinned=? WHERE id=?', value, m.id);
+    this.ev('message', this.msgView(this.store.message(m.id)));
+    this.ev('conv', this.convView(this.store.conv(m.conv)));
+  }
+  onPin(from, f) {
+    this.ack(from, f.id);
+    const m = this.store.message(String(f.mid || ''));
+    if (!m || m.deleted || m.sealed || !this.inChat(this.store.conv(m.conv), from)) return;
+    const ts = Math.min(Number(f.ts) || Date.now(), Date.now() + 60000);
+    this.applyPin(m, f.on ? ts : -ts);
+  }
+
+  // ---- starred messages: a personal bookmark, never sent to anyone
+  star({ id, on }) {
+    const m = this.store.message(String(id));
+    if (!m || m.deleted) throw new Error('Unknown message');
+    this.store.run('UPDATE messages SET starred=? WHERE id=?', on ? Date.now() : 0, m.id);
+    this.ev('message', this.msgView(this.store.message(m.id)));
+  }
+  starred() { return this.store.starred().map((m) => this.msgView(m)); }
 
   reactionsView(m) {
     const groups = new Map();
@@ -484,6 +523,35 @@ class Messenger extends EventEmitter {
       groups.get(emoji).push(user);
     }
     return [...groups].map(([emoji, users]) => ({ emoji, count: users.length, users, mine: users.includes(this.me.id) }));
+  }
+
+  // ---- editing my own message: the new text replaces the old one for everyone, marked "edited"
+  editMessage({ id, text }) {
+    const m = this.store.message(String(id));
+    if (!m) throw new Error('Unknown message');
+    if (m.sender !== this.me.id) throw new Error('You can only edit your own messages');
+    if (m.deleted) throw new Error('This message was deleted');
+    if (m.sealed) throw new Error('Sealed messages cannot be edited');
+    const body = String(text || '').slice(0, 20000);
+    if (!body.trim() && !this.store.filesOf(m.id).length) throw new Error('The message cannot be empty');
+    if (body === m.body) return this.msgView(m);
+    const ts = Math.max(Date.now(), (m.edited || 0) + 1);
+    this.store.run('UPDATE messages SET body=?, edited=? WHERE id=?', body, ts, m.id);
+    for (const r of m.recipients) this.deliver(r, { t: 'edit', id: 'edit:' + m.id, mid: m.id, body, ts }); // same frame id: only the latest edit stays queued
+    const now = this.store.message(m.id);
+    this.ev('message', this.msgView(now));
+    this.ev('conv', this.convView(this.store.conv(m.conv)));
+    return this.msgView(now);
+  }
+
+  onEdit(from, f) {
+    this.ack(from, f.id);
+    const m = this.store.message(String(f.mid || ''));
+    const ts = Number(f.ts) || 0;
+    if (!m || m.sender !== from || m.deleted || m.sealed || ts <= (m.edited || 0)) return; // only the author, only newer edits
+    this.store.run('UPDATE messages SET body=?, edited=? WHERE id=?', String(f.body || '').slice(0, 20000), ts, m.id);
+    this.ev('message', this.msgView(this.store.message(m.id)));
+    this.ev('conv', this.convView(this.store.conv(m.conv)));
   }
 
   // ---- deleting messages
@@ -708,7 +776,7 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, deleted: !!m.deleted, reactions: hidden || m.deleted ? [] : this.reactionsView(m), sub: m.sub || '', mentions: m.mentions, mentionsMe: m.sender !== this.me.id && (m.mentions.includes(this.me.id) || m.mentions.includes('all')), quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, deleted: !!m.deleted, edited: !!m.edited && !m.deleted, pinned: m.pinned > 0, starred: m.starred > 0, reactions: hidden || m.deleted ? [] : this.reactionsView(m), sub: m.sub || '', mentions: m.mentions, mentionsMe: m.sender !== this.me.id && (m.mentions.includes(this.me.id) || m.mentions.includes('all')), quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {
@@ -719,8 +787,10 @@ class Messenger extends EventEmitter {
       else if (last.sealed) preview = last.locked ? '🔑 Locked message' : '🔒 Sealed message'; // never the text, for either side
       else preview = last.body.trim().slice(0, 80) || (this.store.filesOf(last.id).length ? 'Attachment' : '');
     }
-    return { id: c.id, type: c.type, name: c.name, members: c.members.map((m) => ({ id: m.id, name: m.name })), left: !!c.left_group,
-      updated: c.updated, unread: this.store.unread(c.id), unreadMain: this.store.unreadMain(c.id), mentions: this.store.unreadMentions(c.id, this.me.id), subs: this.store.subs(c.id), last: last ? { sender: last.sender, ts: last.ts, preview } : null };
+    return { id: c.id, type: c.type, name: c.name, members: c.members.map((m) => ({ id: m.id, name: m.name, admin: !!m.admin })), left: !!c.left_group,
+      canManage: c.type === 'group' && !c.left_group && this.isGroupAdmin(c, this.me.id),
+      updated: c.updated, unread: this.store.unread(c.id), unreadMain: this.store.unreadMain(c.id), mentions: this.store.unreadMentions(c.id, this.me.id),
+      pins: this.store.pins(c.id).map((m) => ({ id: m.id, sender: m.sender, sub: m.sub || '', preview: m.body.trim().slice(0, 90) || (this.store.filesOf(m.id).length ? 'Attachment' : '') })), subs: this.store.subs(c.id), last: last ? { sender: last.sender, ts: last.ts, preview } : null };
   }
 
   // ------------------------------------------------------------------ groups
@@ -740,19 +810,28 @@ class Messenger extends EventEmitter {
     return view;
   }
 
+  // ---- groups. A group has admins (its creator at first). Only admins may rename it, add or remove members,
+  // or change who is admin; any member may leave. A group left without an admin can be managed by any member again.
   createGroup({ name, members }) {
     const ids = [...new Set([this.me.id, ...(members || [])])];
     if (ids.length < 2) throw new Error('Pick at least one member');
-    const conv = { id: 'g:' + C.rid(8), type: 'group', name: clip(name, 60) || 'New group', members: ids.map((id) => this.memberInfo(id)), version: 1, updated: Date.now() };
+    if (ids.length > GROUP_MAX) throw new Error(`A group can have at most ${GROUP_MAX} members`);
+    const conv = { id: 'g:' + C.rid(8), type: 'group', name: clip(name, 60) || 'New group', members: ids.map((id) => ({ ...this.memberInfo(id), admin: id === this.me.id })), version: 1, updated: Date.now() };
     return this.publishGroup(conv, ids);
   }
 
-  updateGroup({ conv: convId, name, members }) {
+  groupLocked(conv) { return conv.members.some((m) => m.admin); }
+  isGroupAdmin(conv, user) { return !this.groupLocked(conv) || conv.members.some((m) => m.id === user && m.admin); }
+
+  updateGroup({ conv: convId, name, members, admins }) {
     const conv = this.store.conv(convId);
     if (!conv || conv.type !== 'group' || conv.left_group) throw new Error('Unknown group');
+    if (!this.isGroupAdmin(conv, this.me.id)) throw new Error('Only a group admin can change this group');
     const before = conv.members.map((m) => m.id);
     if (name !== undefined) conv.name = clip(name, 60) || conv.name;
-    if (members) conv.members = [...new Set([this.me.id, ...members])].map((id) => conv.members.find((m) => m.id === id) || this.memberInfo(id));
+    if (members) conv.members = [...new Set([this.me.id, ...members])].map((id) => conv.members.find((m) => m.id === id) || { ...this.memberInfo(id), admin: false });
+    if (conv.members.length > GROUP_MAX) throw new Error(`A group can have at most ${GROUP_MAX} members`);
+    if (admins) { const set = new Set([this.me.id, ...admins]); conv.members = conv.members.map((m) => ({ ...m, admin: set.has(m.id) })); } // I stay admin; step down by leaving
     conv.version += 1;
     conv.updated = Date.now();
     return this.publishGroup(conv, new Set([...before, ...conv.members.map((m) => m.id)]));
@@ -773,11 +852,19 @@ class Messenger extends EventEmitter {
     const members = [];
     for (const m of f.members) {
       if (!m || !C.isValidPub(m.pub) || C.idFromPub(m.pub) !== m.id) return;
-      members.push({ id: m.id, name: clip(m.name, 40), pub: m.pub });
+      members.push({ id: m.id, name: clip(m.name, 40), pub: m.pub, admin: !!m.admin });
     }
     const existing = this.store.conv(f.gid);
-    // Only members may change a group; a brand new group must include its sender.
-    const allowed = existing ? existing.members.some((m) => m.id === from) : members.some((m) => m.id === from);
+    // A brand new group must include its sender. An existing one may be changed by its admins (by any member while it
+    // has no admin); a plain member may only take themselves out, leaving everything else as it was.
+    let allowed;
+    if (!existing) allowed = members.some((m) => m.id === from);
+    else if (!existing.members.some((m) => m.id === from)) allowed = false;
+    else if (this.isGroupAdmin(existing, from)) allowed = true;
+    else {
+      const rest = existing.members.filter((m) => m.id !== from);
+      allowed = clip(f.name, 60) === existing.name && members.length === rest.length && rest.every((m) => members.some((x) => x.id === m.id && !!x.admin === !!m.admin));
+    }
     this.ack(from, f.id);
     if (!allowed || (existing && Number(f.version) <= existing.version)) return;
     for (const m of members) if (m.id !== this.me.id) { const p = this.knowPeer(m.id, m.pub, m.name); if (!p.name && m.name) { p.name = m.name; this.store.upsertPeer(p); } }

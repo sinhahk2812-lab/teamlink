@@ -3,7 +3,7 @@
 const TOKEN = new URLSearchParams(location.search).get('token') || '';
 const desk = window.desktop || null;
 const $ = (id) => document.getElementById(id);
-const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, locked: false, replyTo: null, sub: '', progress: new Map(), results: null };
+const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, locked: false, replyTo: null, editing: null, sel: null, starredView: false, sub: '', progress: new Map(), results: null };
 
 // ---------------------------------------------------------------- tiny DOM helpers (text only, never innerHTML)
 function h(tag, props, ...kids) {
@@ -299,7 +299,8 @@ function renderSide() {
 
 function renderResults() {
   const q = $('search').value.trim().toLowerCase();
-  const people = [...S.peers.values()].filter((p) => p.name.toLowerCase().includes(q) || p.dept.toLowerCase().includes(q));
+  $('resultTitle').textContent = S.starredView ? '⭐ Starred messages' : 'Search results';
+  const people = S.starredView ? [] : [...S.peers.values()].filter((p) => p.name.toLowerCase().includes(q) || p.dept.toLowerCase().includes(q));
   const nodes = people.map((p) => h('li', { class: 'item', onclick: () => { clearSearch(); openConv('dm:' + p.id); } },
     avatar(p.id, p.name, dotOf(p)), h('div', { class: 'body' }, h('div', { class: 'top' }, h('span', { class: 'name' }, p.name)), h('div', { class: 'sub' }, p.dept || p.host))));
   for (const m of S.results) {
@@ -319,10 +320,13 @@ let searchTimer;
 $('search').addEventListener('input', () => {
   clearTimeout(searchTimer);
   const q = $('search').value.trim();
+  S.starredView = false;
   if (q.length < 2) { S.results = null; return renderSide(); }
   searchTimer = setTimeout(async () => { S.results = await call('search', { text: q }); renderSide(); }, 200);
 });
-function clearSearch() { $('search').value = ''; S.results = null; renderSide(); }
+function clearSearch() { $('search').value = ''; S.results = null; S.starredView = false; renderSide(); }
+$('starBtn').addEventListener('click', showStarred);
+$('resultClose').addEventListener('click', clearSearch);
 
 // ---------------------------------------------------------------- chat
 async function openConv(id, focusMsg, sub) {
@@ -333,6 +337,7 @@ async function openConv(id, focusMsg, sub) {
   S.active = id;
   if (changed || sub !== undefined) S.sub = sub || '';
   if (changed) rpc('hideSealed', {}).catch(() => {});
+  if (changed) { S.sel = null; S.editing = null; closeMenu(); renderSel(); }
   if (desk && desk.setActiveConv) desk.setActiveConv(id);
   if (changed) { S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); }
   document.body.classList.add('in-chat');
@@ -405,7 +410,7 @@ function renderHead() {
   else if (!dm.online) sub = 'Offline. Messages are delivered when they come back.';
   else sub = (dm.status === 'away' ? 'Away' + (dm.absenceMsg ? ': ' + dm.absenceMsg : '') : 'Online') + (dm.via === 'relay' ? ' · remote (via relay)' : ' · on your network') + (dm.dept ? ' · ' + dm.dept : '');
   $('chatSub').textContent = sub;
-  renderSubs();
+  renderSubs(); renderPins();
   $('groupEditBtn').hidden = c.type !== 'group' || c.left;
   $('chatMenuBtn').hidden = c.type === 'all';
   $('sealBtn').hidden = c.type !== 'dm';
@@ -543,20 +548,26 @@ function msgNode(m, c, showWho) {
     if (m.recipients <= 1) detail = m.readAt ? `${m.sealed ? 'Opened' : 'Seen'} ${fmtTime(m.readAt)}` : m.delivered ? (m.sealed ? 'Delivered, not opened yet' : 'Delivered, not seen yet') : 'Waiting for them to come online';
     else detail = `Delivered to ${m.delivered} of ${m.recipients}` + (m.seen ? ` · Seen by ${m.seen}` : '');
   }
-  bubble.append(h('span', { class: 'stamp', title: detail, onclick: () => toast(detail) }, fmtTime(m.ts), ticks));
+  bubble.append(h('span', { class: 'stamp', title: detail, onclick: () => toast(detail) }, m.pinned && '📌 ', m.starred && '★ ', m.edited && 'edited · ', fmtTime(m.ts), ticks));
   const delBtn = h('button', { title: 'Delete', onclick: () => deleteDialog(m) }, '🗑');
   const acts = m.deleted || m.hidden || m.sealed ? h('div', { class: 'acts' }, delBtn) : h('div', { class: 'acts' },
     !c.left && h('button', { title: 'React with an emoji', onclick: (e) => reactPicker(e.currentTarget, m) }, '😊'),
     !c.left && h('button', { title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩'),
-    h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'), delBtn);
-  return freshClass(m, h('div', { class: 'msg' + (m.mine ? ' mine' : '') + (m.mentionsMe ? ' tagged' : ''), 'data-id': m.id },
+    h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'),
+    h('button', { title: 'More: copy, pin, star, edit, select, delete', onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); msgMenu(r.left, r.bottom + 4, m); } }, '⋯'));
+  const picked = S.sel && S.sel.has(m.id);
+  return freshClass(m, h('div', { class: 'msg' + (m.mine ? ' mine' : '') + (m.mentionsMe ? ' tagged' : '') + (picked ? ' picked' : ''), 'data-id': m.id,
+    oncontextmenu: (e) => { if (S.sel) return; e.preventDefault(); msgMenu(e.clientX, e.clientY, m); },
+    onclick: (e) => { if (!S.sel) return; e.preventDefault(); e.stopPropagation(); if (S.sel.has(m.id)) S.sel.delete(m.id); else S.sel.add(m.id); renderMessages(false); renderSel(); } },
+    S.sel && h('span', { class: 'tick' }, picked ? '✓' : ''),
     showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts),
     m.reactions && m.reactions.length ? h('div', { class: 'reacts' }, m.reactions.map((r) => recent(reactAt, m.id + r.emoji, 600, h('button', { class: 'react' + (r.mine ? ' mine' : ''),
       title: r.users.map((u) => (u === S.me.id ? 'You' : memberName(c, u))).join(', '), onclick: () => rpc('react', { id: m.id, emoji: r.emoji }).catch((e) => toast(e.message)) }, r.emoji, r.count > 1 ? h('b', null, String(r.count)) : null), 'pop'))) : null));
 }
 
 // Forward a message (text and attachments) to people and groups.
-function forwardDialog(m) {
+function forwardDialog(input) {
+  const list = Array.isArray(input) ? input : [input], m = list[0];
   const people = [...S.peers.values()].sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
   const groups = [...S.convs.values()].filter((c) => c.type === 'group' && !c.left);
   const row = (conv, seed, label, dot) => h('label', null, h('input', { type: 'checkbox', value: conv }), avatar(seed, label, dot), h('span', null, label));
@@ -568,15 +579,84 @@ function forwardDialog(m) {
   const what = m.body.trim() ? m.body.trim().slice(0, 140) : '';
   const fileNote = m.files.length ? (m.files.length === 1 ? m.files[0].name.split('/').pop() : m.files.length + ' files') : '';
   modal('Forward message', [
-    h('div', { class: 'quote' }, h('b', null, 'Message'), h('span', null, [what, fileNote && '📎 ' + fileNote].filter(Boolean).join(' · '))),
+    h('div', { class: 'quote' }, h('b', null, list.length > 1 ? `${list.length} messages` : 'Message'), h('span', null, list.length > 1 ? list.map((x) => x.body.trim() || 'Attachment').join(' · ').slice(0, 160) : [what, fileNote && '📎 ' + fileNote].filter(Boolean).join(' · '))),
     h('label', null, 'Forward to'),
     boxes.length ? h('div', { class: 'pick' }, boxes) : h('p', { class: 'hint' }, 'No teammates found yet.'),
   ], { label: 'Forward', run: async () => {
     const convs = picked();
     if (!convs.length) { toast('Pick at least one person or group'); throw new Error('none'); }
-    const n = await call('forward', { id: m.id, convs });
+    let n = 0;
+    for (const one of list) n = await call('forward', { id: one.id, convs });
     toast(`Forwarded to ${n} ${n === 1 ? 'chat' : 'chats'}`);
+    if (S.sel) { S.sel = null; renderMessages(false); renderSel(); }
   } });
+}
+
+// ---------------------------------------------------------------- message menu (right-click, or the "..." button)
+function closeMenu() { const old = document.getElementById('msgMenu'); if (old) old.remove(); }
+function msgMenu(x, y, m) {
+  closeMenu();
+  const c = S.convs.get(S.active);
+  if (!c) return;
+  const plain = !m.deleted && !m.hidden && !m.sealed; // an ordinary, readable message
+  const inGroup = c.type !== 'dm', mine = (m.reactions.find((r) => r.mine) || {}).emoji;
+  const item = (icon, label, run, danger) => h('button', { class: 'mi' + (danger ? ' danger' : ''), onclick: () => { closeMenu(); run(); } }, h('span', null, icon), label);
+  const react = (e) => { closeMenu(); reactAt.set(m.id + e, Date.now()); rpc('react', { id: m.id, emoji: e }).catch((err) => toast(err.message)); };
+  const menu = h('div', { id: 'msgMenu' },
+    plain && !c.left && h('div', { class: 'mreact' }, ['👍', '❤️', '😂', '😮', '😢', '🙏'].map((e) => h('button', { class: e === mine ? 'on' : '', onclick: () => react(e) }, e)),
+      h('button', { class: 'plus', title: 'More emoji', onclick: () => { closeMenu(); emojiTarget = m; toggleEmoji(true); } }, '＋')),
+    h('div', { class: 'mlist' },
+      plain && !c.left && item('↩', 'Reply', () => { S.editing = null; S.replyTo = m; renderReply(); $('input').focus(); }),
+      plain && inGroup && !m.mine && item('🔏', 'Reply privately', async () => { await openConv('dm:' + m.sender); S.replyTo = m; renderReply(); $('input').focus(); }),
+      inGroup && !m.mine && item('💬', 'Message ' + memberName(c, m.sender), () => openConv('dm:' + m.sender)),
+      plain && m.body && item('📋', 'Copy', () => copyText(m.body)),
+      plain && item('↪', 'Forward', () => forwardDialog(m)),
+      plain && m.mine && m.body && !c.left && item('✏️', 'Edit', () => { S.replyTo = null; S.editing = m; $('input').value = m.body; autoGrow(); renderReply(); $('input').focus(); }),
+      plain && !c.left && item('📌', m.pinned ? 'Unpin' : 'Pin', () => call('pin', { id: m.id, on: !m.pinned })),
+      !m.deleted && item(m.starred ? '★' : '☆', m.starred ? 'Unstar' : 'Star', () => call('star', { id: m.id, on: !m.starred })),
+      item('☑', 'Select', () => { S.sel = new Set([m.id]); renderMessages(false); renderSel(); }),
+      h('hr'),
+      m.mine && !m.deleted && item('🗑', 'Delete for everyone', () => deleteDialog(m), true),
+      item('🗑', 'Delete for me', () => call('deleteMessage', { id: m.id, everyone: false }), true)));
+  document.body.append(menu);
+  const w = menu.offsetWidth, hgt = menu.offsetHeight;
+  menu.style.left = Math.max(8, Math.min(innerWidth - w - 8, x)) + 'px';
+  menu.style.top = Math.max(8, Math.min(innerHeight - hgt - 8, y)) + 'px';
+}
+document.addEventListener('mousedown', (e) => { if (!e.target.closest('#msgMenu')) closeMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenu(); if (S.sel) { S.sel = null; renderMessages(false); renderSel(); } } });
+window.addEventListener('blur', closeMenu);
+async function copyText(text) { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Could not copy'); } }
+
+// ---------------------------------------------------------------- select several messages
+function renderSel() {
+  const bar = $('selBar'), on = !!S.sel;
+  bar.hidden = !on; $('composer').hidden = on || !!(S.convs.get(S.active) || {}).left;
+  $('messages').classList.toggle('picking', on);
+  if (!on) return;
+  const list = () => S.msgs.filter((m) => S.sel.has(m.id));
+  const done = () => { S.sel = null; renderMessages(false); renderSel(); };
+  const usable = () => list().filter((m) => !m.deleted && !m.hidden && !m.sealed);
+  bar.replaceChildren(h('b', null, `${S.sel.size} selected`), h('span', { class: 'ispace' }),
+    h('button', { class: 'ghost', onclick: () => { const t = usable().filter((m) => m.body).map((m) => m.body).join('\n'); if (t) copyText(t); done(); } }, '📋 Copy'),
+    h('button', { class: 'ghost', onclick: () => { const ms = usable(); if (!ms.length) return toast('Nothing here can be forwarded'); forwardDialog(ms); } }, '↪ Forward'),
+    h('button', { class: 'ghost danger', onclick: () => { const ms = list(); modal(`Delete ${ms.length} message${ms.length === 1 ? '' : 's'}?`, [h('p', { class: 'hint' }, 'They are removed from this computer only.')],
+      { label: 'Delete for me', danger: true, run: async () => { for (const m of ms) await call('deleteMessage', { id: m.id, everyone: false }); done(); } }); } }, '🗑 Delete'),
+    h('button', { class: 'ghost', onclick: done }, 'Cancel'));
+}
+
+// ---------------------------------------------------------------- pinned messages (top of the chat) and starred list
+function renderPins() {
+  const c = S.convs.get(S.active), bar = $('pinBar'), pins = (c && c.pins) || [];
+  bar.hidden = !pins.length;
+  bar.replaceChildren(...pins.map((p) => h('div', { class: 'pin', onclick: async () => { if ((p.sub || '') !== S.sub) await openConv(c.id, p.id, p.sub || ''); else jumpTo(p.id); } },
+    h('span', null, '📌'), h('span', { class: 'ptext' }, h('b', null, memberName(c, p.sender) + ': '), p.preview),
+    h('button', { title: 'Unpin', onclick: (e) => { e.stopPropagation(); call('pin', { id: p.id, on: false }); } }, '×'))));
+}
+async function showStarred() {
+  S.starredView = true; $('search').value = '';
+  S.results = await call('starred');
+  renderSide();
 }
 
 // Delete a message: for me only, or (my own messages) for everyone in the chat.
@@ -609,11 +689,12 @@ function jumpTo(id) {
 }
 
 function renderReply() {
-  const m = S.replyTo, c = S.convs.get(S.active);
+  const m = S.editing || S.replyTo, c = S.convs.get(S.active);
   $('replyBar').hidden = !m;
+  $('sendBtn').textContent = S.editing ? 'Save' : 'Send';
   if (!m || !c) return;
-  $('replyBar').replaceChildren(h('span', { class: 'rtext' }, h('b', null, 'Replying to ' + memberName(c, m.sender) + ': '), m.body.trim() || 'Attachment'),
-    h('button', { title: 'Cancel reply', onclick: () => { S.replyTo = null; renderReply(); } }, '×'));
+  $('replyBar').replaceChildren(h('span', { class: 'rtext' }, h('b', null, S.editing ? '✏️ Editing your message: ' : 'Replying to ' + memberName(c, m.sender) + ': '), m.body.trim() || 'Attachment'),
+    h('button', { title: 'Cancel', onclick: () => { if (S.editing) { $('input').value = ''; autoGrow(); } S.replyTo = null; S.editing = null; renderReply(); } }, '×'));
 }
 
 // Locked message: the receiver proves it is really them by typing their own lock password.
@@ -714,6 +795,11 @@ async function send() {
   if (!text.trim() && !S.pending.length) return;
   sending = true; $('sendBtn').disabled = true;
   try {
+    if (S.editing) { // saving an edit, not sending something new
+      await call('editMessage', { id: S.editing.id, text });
+      S.editing = null; $('input').value = ''; autoGrow(); renderReply();
+      return;
+    }
     await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, sub: S.sub || undefined, mentions: draftMentions(text), paths: S.pending.map((a) => a.path) });
     $('input').value = ''; autoGrow(); toggleEmoji(false);
     const sb = $('sendBtn'); sb.classList.remove('launch', 'ready'); void sb.offsetWidth; sb.classList.add('launch'); setTimeout(() => sb.classList.remove('launch'), 600);
@@ -823,7 +909,9 @@ function toggleEmoji(show) {
   const open = show === undefined ? pop.hidden : show;
   if (open) { buildEmoji(); drawRecentEmoji(); }
   pop.hidden = !open;
-  $('emojiBtn').classList.toggle('on', open);
+  if (!open) emojiTarget = null;
+  pop.classList.toggle('reacting', open && !!emojiTarget);
+  $('emojiBtn').classList.toggle('on', open && !emojiTarget);
   if (open && !matchMedia('(max-width: 720px)').matches) $('emojiSearch').focus();
 }
 function insertEmoji(e) {
@@ -836,7 +924,14 @@ function insertEmoji(e) {
   rpc('setRecentEmoji', { list }).catch(() => {});
 }
 $('emojiBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleEmoji(); });
-$('emojiGrid').addEventListener('click', (e) => { const b = e.target.closest('button.e'); if (b) insertEmoji(b.textContent); });
+let emojiTarget = null; // a message waiting for a reaction chosen from the full picker ("+" in the message menu)
+$('emojiGrid').addEventListener('click', (e) => {
+  const b = e.target.closest('button.e'); if (!b) return;
+  if (!emojiTarget) return insertEmoji(b.textContent);
+  const m = emojiTarget; emojiTarget = null; toggleEmoji(false);
+  reactAt.set(m.id + b.textContent, Date.now());
+  rpc('react', { id: m.id, emoji: b.textContent }).catch((err) => toast(err.message));
+});
 $('emojiTabs').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
   $('emojiSearch').value = ''; filterEmoji();
@@ -1125,22 +1220,35 @@ $('themeBtn').addEventListener('click', appearanceDialog);
 $('banner').addEventListener('click', openSettings);
 
 function groupDialog(conv) {
-  const name = h('input', { type: 'text', value: conv ? conv.name : '', maxLength: 60, placeholder: 'e.g. Sales team' });
-  const current = new Set(conv ? conv.members.map((m) => m.id) : []);
-  const people = [...S.peers.values()].sort((a, b) => a.name.localeCompare(b.name));
-  const boxes = people.map((p) => {
-    const cb = h('input', { type: 'checkbox', value: p.id, checked: current.has(p.id) });
-    return h('label', null, cb, avatar(p.id, p.name, dotOf(p)), h('span', null, p.name + (p.dept ? ' · ' + p.dept : '')));
-  });
-  const picked = () => boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+  const canManage = !conv || conv.canManage;
   const leave = conv && h('button', { class: 'ghost danger', onclick: async () => { await call('leaveGroup', { conv: conv.id }); $('modal').hidden = true; } }, 'Leave group');
+  if (!canManage) { // a plain member: can look and can leave, nothing else
+    return modal(conv.name || 'Group', [
+      h('p', { class: 'hint' }, 'Only group admins can rename this group or add and remove members.'),
+      h('label', null, `Members (${conv.members.length})`),
+      h('div', { class: 'pick' }, conv.members.map((m) => h('label', null, avatar(m.id, memberName(conv, m.id)), h('span', null, (m.id === S.me.id ? 'You' : memberName(conv, m.id)) + (m.admin ? ' · admin' : ''))))),
+    ], { label: 'Close', run: async () => {} }, leave);
+  }
+  const name = h('input', { type: 'text', value: conv ? conv.name : '', maxLength: 60, placeholder: 'e.g. Sales team' });
+  const current = new Map(conv ? conv.members.map((m) => [m.id, m]) : []);
+  const people = [...S.peers.values()].sort((a, b) => current.has(b.id) - current.has(a.id) || a.name.localeCompare(b.name));
+  const rows = people.map((p) => {
+    const inGroup = h('input', { type: 'checkbox', value: p.id, checked: current.has(p.id) });
+    const admin = h('input', { type: 'checkbox', checked: !!(current.get(p.id) || {}).admin, title: 'Admins can rename the group and add or remove members' });
+    inGroup.addEventListener('change', () => { if (!inGroup.checked) admin.checked = false; });
+    admin.addEventListener('change', () => { if (admin.checked) inGroup.checked = true; });
+    return { id: p.id, inGroup, admin, node: h('div', { class: 'grow' }, h('label', null, inGroup, avatar(p.id, p.name, dotOf(p)), h('span', null, p.name + (p.dept ? ' · ' + p.dept : ''))), h('label', { class: 'gadmin' }, admin, 'Admin')) };
+  });
+  const picked = () => rows.filter((r) => r.inGroup.checked).map((r) => r.id);
+  const admins = () => rows.filter((r) => r.admin.checked).map((r) => r.id);
   modal(conv ? 'Group settings' : 'New group', [
     ...field('Group name', name), h('label', null, 'Members'),
-    people.length ? h('div', { class: 'pick' }, boxes) : h('p', { class: 'hint' }, 'No teammates found yet.'),
+    people.length ? h('div', { class: 'pick' }, rows.map((r) => r.node)) : h('p', { class: 'hint' }, 'No teammates found yet.'),
+    h('p', { class: 'hint' }, 'You are an admin of this group. Only admins can rename it or add and remove members; tick "Admin" to let someone else do that too. Up to 256 members.'),
   ], { label: conv ? 'Save' : 'Create', run: async () => {
     if (!picked().length) { toast('Pick at least one member'); throw new Error('none'); }
-    if (conv) await call('updateGroup', { conv: conv.id, name: name.value, members: picked() });
-    else { const g = await call('createGroup', { name: name.value, members: picked() }); S.convs.set(g.id, g); openConv(g.id); }
+    if (conv) await call('updateGroup', { conv: conv.id, name: name.value, members: picked(), admins: admins() });
+    else { let g = await call('createGroup', { name: name.value, members: picked() }); if (admins().length) g = await call('updateGroup', { conv: g.id, admins: admins() }); S.convs.set(g.id, g); openConv(g.id); }
   } }, leave);
 }
 // One message to a few chosen people. Each of them gets it as a normal private message

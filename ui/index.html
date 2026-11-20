@@ -25,9 +25,10 @@
     <div id="banner" hidden></div>
     <nav id="lists">
       <div id="inboxNav" hidden><button id="inboxBtn" class="item"><span class="avatar">📥</span><span class="body"><span class="name">WhatsApp Inbox</span></span><span id="inboxBadge" class="badge" hidden></span></button></div><!-- WHATSAPP-INTAKE -->
+      <div id="starNav"><button id="starBtn" class="item"><span class="avatar">⭐</span><span class="body"><span class="name">Starred messages</span></span></button></div>
       <section id="chatSection"><h3>Chats <button id="newGroupLink" title="Create a group chat">＋ New group</button></h3><ul id="convList"></ul></section>
       <section><h3 id="membersTitle">Members</h3><ul id="peerList"></ul></section>
-      <section id="resultSection" hidden><h3>Search results</h3><ul id="resultList"></ul></section>
+      <section id="resultSection" hidden><h3><span id="resultTitle">Search results</span> <button id="resultClose" title="Close">× Close</button></h3><ul id="resultList"></ul></section>
     </nav>
     <footer id="net"></footer>
   </aside>
@@ -47,6 +48,7 @@
         <button id="groupEditBtn" class="icon-btn" title="Group members" hidden>👥</button>
         <button id="chatMenuBtn" class="icon-btn" title="Delete conversation">🗑</button>
       </header>
+      <div id="pinBar" hidden></div>
       <div id="subBar" hidden></div>
       <div id="messages"></div>
       <div id="dropHint" hidden>Drop files to attach</div>
@@ -56,6 +58,7 @@
         <input id="emojiSearch" type="search" placeholder="Search emoji" autocomplete="off">
         <div id="emojiGrid"></div>
       </div>
+      <div id="selBar" hidden></div>
       <footer id="composer">
         <div id="replyBar" hidden></div>
         <div id="attachments"></div>
