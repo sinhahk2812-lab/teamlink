@@ -151,6 +151,7 @@ function startServer(messenger, { port = 0, token } = {}) {
     getState: () => messenger.getState(),
     getMessages: (p) => messenger.getMessages(p),
     send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, locked: p.locked, replyTo: p.replyTo, sub: p.sub || undefined, mentions: p.mentions, paths: (p.paths || []).map(String) }),
+    react: (p) => messenger.react({ id: p.id, emoji: p.emoji }),
     deleteMessage: (p) => messenger.deleteMessage({ id: p.id, everyone: !!p.everyone }),
     markRead: (p) => messenger.markRead(String(p.conv), p.sub ? String(p.sub) : undefined),
     createSub: (p) => messenger.createSub(p),

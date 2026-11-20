@@ -31,6 +31,13 @@ function safeRelPath(name) {
   return parts.length ? parts.slice(-12) : ['file'];
 }
 
+// Make sure a folder exists. A folder that is already there is left alone: asking Windows to "create" a drive
+// root such as D:\\ fails with EPERM even though saving into it is fine.
+function ensureDir(dir) {
+  if (fs.existsSync(dir)) return;
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { throw new Error(`Cannot use the folder ${dir}. Choose another place to save.`); }
+}
+
 function uniquePath(dir, rel) {
   const target = path.join(dir, ...rel);
   if (!fs.existsSync(target)) return target;
@@ -341,7 +348,7 @@ class Messenger extends EventEmitter {
     let f;
     try { f = JSON.parse(plain.subarray(1).toString()); } catch { return; }
     try {
-      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete }[f.t];
+      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete, react: this.onReact }[f.t];
       if (handler) handler.call(this, from, f);
       else this.intake.onFrame(from, f); // WHATSAPP-INTAKE
     } catch (e) {
@@ -431,6 +438,52 @@ class Messenger extends EventEmitter {
     } else if (st.isFile()) {
       out.push({ fid: C.rid(), name, size: st.size, mime: IMAGE_MIME[path.extname(p).toLowerCase()] || '', path: p });
     }
+  }
+
+  // ---- emoji reactions: one per person per message; choosing the same emoji again removes it
+  react({ id, emoji }) {
+    const m = this.store.message(String(id));
+    if (!m || m.deleted) throw new Error('Unknown message');
+    if (m.sealed) throw new Error('Sealed messages cannot be reacted to');
+    const conv = this.store.conv(m.conv);
+    if (!conv || conv.left_group) throw new Error('You are no longer in this chat');
+    const e = [...String(emoji || '')].slice(0, 8).join('');
+    const mine = (m.reactions[this.me.id] || [])[0];
+    const next = e && e !== mine ? e : ''; // same emoji again = take it back
+    const ts = Date.now();
+    this.setReaction(m, this.me.id, next, ts);
+    for (const r of this.recipientsOf(conv)) this.deliver(r, { t: 'react', id: `react:${m.id}:${this.me.id}`, mid: m.id, emoji: next, ts }); // same frame id: only my latest choice stays queued
+    return this.msgView(this.store.message(m.id));
+  }
+
+  setReaction(m, user, emoji, ts) {
+    const prev = m.reactions[user];
+    if (prev && prev[1] >= ts) return false; // an older change that arrived late
+    m.reactions[user] = [emoji, ts]; // an empty emoji is kept as "removed at ts" so a late older frame cannot bring it back
+    this.store.run('UPDATE messages SET reactions=? WHERE id=?', JSON.stringify(m.reactions), m.id);
+    this.ev('message', this.msgView(this.store.message(m.id)));
+    return true;
+  }
+
+  onReact(from, f) {
+    this.ack(from, f.id);
+    const m = this.store.message(String(f.mid || ''));
+    if (!m || m.deleted || m.sealed) return;
+    const conv = this.store.conv(m.conv);
+    const inChat = conv && (conv.type === 'all' || (conv.type === 'dm' && conv.id === 'dm:' + from) || (conv.type === 'group' && conv.members.some((x) => x.id === from)));
+    if (!inChat) return;
+    const emoji = [...String(f.emoji || '')].slice(0, 8).join('');
+    if (this.setReaction(m, from, emoji, Math.min(Number(f.ts) || Date.now(), Date.now())) && emoji && m.sender === this.me.id) this.ev('reacted', { conv: m.conv, id: m.id, by: from, emoji });
+  }
+
+  reactionsView(m) {
+    const groups = new Map();
+    for (const [user, [emoji]] of Object.entries(m.reactions || {})) {
+      if (!emoji) continue;
+      if (!groups.has(emoji)) groups.set(emoji, []);
+      groups.get(emoji).push(user);
+    }
+    return [...groups].map(([emoji, users]) => ({ emoji, count: users.length, users, mine: users.includes(this.me.id) }));
   }
 
   // ---- deleting messages
@@ -655,7 +708,7 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, deleted: !!m.deleted, sub: m.sub || '', mentions: m.mentions, mentionsMe: m.sender !== this.me.id && (m.mentions.includes(this.me.id) || m.mentions.includes('all')), quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, deleted: !!m.deleted, reactions: hidden || m.deleted ? [] : this.reactionsView(m), sub: m.sub || '', mentions: m.mentions, mentionsMe: m.sender !== this.me.id && (m.mentions.includes(this.me.id) || m.mentions.includes('all')), quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {
@@ -758,11 +811,11 @@ class Messenger extends EventEmitter {
     const target = saveAs && path.isAbsolute(saveAs) ? saveAs
       : auto ? path.join(this.dataDir, 'files', fid + path.extname(rel[rel.length - 1]).toLowerCase())
         : uniquePath(this.cfg.downloadDir, rel);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
+    ensureDir(path.dirname(target));
     const xid = C.rid(8);
     const d = { xid, fid, from: f.owner, target, tmp: target + '.part', size: f.size, got: 0, seq: 0, last: Date.now(), shown: 0 };
     d.out = fs.createWriteStream(d.tmp);
-    d.out.on('error', (e) => this.endDownload(d, e.message));
+    d.out.on('error', (e) => this.endDownload(d, /EPERM|EACCES/.test(e.message) ? 'Windows does not allow saving in that folder. Choose another place.' : /ENOSPC/.test(e.message) ? 'The disk is full.' : e.message));
     d.watch = setInterval(() => { if (Date.now() - d.last > 30000) this.endDownload(d, 'Transfer timed out'); }, 5000);
     this.downloads.set(xid, d);
     this.fileState(f, 'downloading', 0);
@@ -929,7 +982,7 @@ class Messenger extends EventEmitter {
     if (!this.cfg.backup) throw new Error('Set a backup key first');
     const file = target && path.isAbsolute(target) ? target
       : path.join(this.backupDir(), `TeamLink-backup-${new Date().toISOString().slice(0, 10)}.tlbackup`);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    ensureDir(path.dirname(file));
     const snap = path.join(this.dataDir, 'backup-snapshot.db');
     fs.rmSync(snap, { force: true });
     this.store.snapshot(snap);

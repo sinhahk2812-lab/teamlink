@@ -446,3 +446,22 @@ body[data-motion="on"] #mentionPop:not([hidden]) { animation: growIn .14s ease-o
 /* deleted for everyone */
 .bubble.gone, body[data-style="glass"] .bubble.gone, body[data-style="glass"] .msg.mine .bubble.gone { font-style: italic; color: var(--dim); background: color-mix(in srgb, var(--text) 6%, transparent); border: 1px dashed var(--line); box-shadow: none; }
 .bubble.gone .stamp { color: var(--dim) !important; }
+
+/* ---------- emoji reactions ---------- */
+.reacts { display: flex; flex-wrap: wrap; gap: 4px; margin: -5px 10px 2px; position: relative; z-index: 1; }
+.msg.mine .reacts { justify-content: flex-end; }
+.react { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 1px 7px; font-size: 14px; line-height: 1.35; cursor: pointer;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; box-shadow: var(--shadow); }
+.react b { font: 600 11px system-ui, sans-serif; color: var(--dim); }
+.react.mine { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--panel)); }
+.react.mine b { color: var(--accent); }
+#reactBar { position: fixed; z-index: 30; display: flex; gap: 2px; padding: 5px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#reactBar button { border: 0; background: none; font-size: 22px; line-height: 1; padding: 5px; border-radius: 50%; cursor: pointer; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+#reactBar button:hover { background: color-mix(in srgb, var(--text) 10%, transparent); transform: scale(1.3) translateY(-3px); }
+#reactBar button.on { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+body[data-style="glass"] #reactBar { border: 1px solid var(--lg-rim); background: var(--lg-sheen), color-mix(in srgb, var(--panel) 66%, transparent); -webkit-backdrop-filter: var(--lg-blur); backdrop-filter: var(--lg-blur); }
+body[data-style="glass"] .react { border-color: var(--lg-rim); background: var(--lg-sheen), color-mix(in srgb, var(--panel) 70%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+body[data-style="glass"] .react.mine { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 34%, var(--panel)); }
+body[data-motion="on"] #reactBar { animation: growIn .14s cubic-bezier(.2, .9, .3, 1.3); }
+body[data-motion="on"] #reactBar button { transition: transform .12s; }
+body[data-motion="on"] .react.pop { animation: jelly .5s cubic-bezier(.2, .9, .3, 1.2) both; animation-delay: var(--age, 0ms); }

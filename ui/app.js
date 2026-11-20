@@ -101,6 +101,7 @@ function onEvent(event, d) {
   else if (event === 'net') { S.net = d; renderNet(); }
   else if (event === 'message') onMessage(d);
   else if (event === 'file') onFile(d);
+  else if (event === 'reacted') { reactAt.set(d.id + d.emoji, Date.now()); if (d.conv !== S.active || !document.hasFocus()) toast(`${peerName(d.by)} reacted ${d.emoji} to your message`); }
   else if (event === 'messageGone') { if (d.conv === S.active) { S.msgs = S.msgs.filter((x) => x.id !== d.id); renderMessages(false); } }
   else if ((event === 'intake' || event === 'intakeAlert') && typeof intakeEvent === 'function') intakeEvent(event, d); // WHATSAPP-INTAKE
   else if (event === 'incoming') { pingAt.set(d.conv, Date.now()); renderSide(); notify(d); }
@@ -545,10 +546,13 @@ function msgNode(m, c, showWho) {
   bubble.append(h('span', { class: 'stamp', title: detail, onclick: () => toast(detail) }, fmtTime(m.ts), ticks));
   const delBtn = h('button', { title: 'Delete', onclick: () => deleteDialog(m) }, '🗑');
   const acts = m.deleted || m.hidden || m.sealed ? h('div', { class: 'acts' }, delBtn) : h('div', { class: 'acts' },
+    !c.left && h('button', { title: 'React with an emoji', onclick: (e) => reactPicker(e.currentTarget, m) }, '😊'),
     !c.left && h('button', { title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩'),
     h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'), delBtn);
   return freshClass(m, h('div', { class: 'msg' + (m.mine ? ' mine' : '') + (m.mentionsMe ? ' tagged' : ''), 'data-id': m.id },
-    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts)));
+    showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts),
+    m.reactions && m.reactions.length ? h('div', { class: 'reacts' }, m.reactions.map((r) => recent(reactAt, m.id + r.emoji, 600, h('button', { class: 'react' + (r.mine ? ' mine' : ''),
+      title: r.users.map((u) => (u === S.me.id ? 'You' : memberName(c, u))).join(', '), onclick: () => rpc('react', { id: m.id, emoji: r.emoji }).catch((e) => toast(e.message)) }, r.emoji, r.count > 1 ? h('b', null, String(r.count)) : null), 'pop'))) : null));
 }
 
 // Forward a message (text and attachments) to people and groups.
@@ -582,6 +586,20 @@ function deleteDialog(m) {
     h('p', { class: 'hint' }, forEveryone ? '"Delete for everyone" removes the text and files from every member\'s chat and leaves a "message deleted" note. It cannot be undone. Someone who is offline gets it removed when they come back.'
       : 'This removes the message from this computer only.'),
   ], { label: 'Delete for me', danger: true, run: () => call('deleteMessage', { id: m.id, everyone: false }) }, forEveryone);
+}
+
+// Emoji reactions: a small bar of quick choices next to the message; the same emoji again takes it back.
+const reactAt = new Map();
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '✅'];
+function reactPicker(anchor, m) {
+  const old = document.getElementById('reactBar'); if (old) old.remove();
+  const mine = (m.reactions.find((r) => r.mine) || {}).emoji;
+  const bar = h('div', { id: 'reactBar' }, QUICK_REACTIONS.map((e) => h('button', { class: e === mine ? 'on' : '', onclick: () => { bar.remove(); reactAt.set(m.id + e, Date.now()); rpc('react', { id: m.id, emoji: e }).catch((err) => toast(err.message)); } }, e)));
+  document.body.append(bar);
+  const r = anchor.getBoundingClientRect(), w = bar.offsetWidth;
+  bar.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
+  bar.style.top = Math.max(8, r.top - bar.offsetHeight - 6) + 'px';
+  setTimeout(() => document.addEventListener('mousedown', function close(ev) { if (!bar.contains(ev.target)) { bar.remove(); document.removeEventListener('mousedown', close); } }), 0);
 }
 
 function jumpTo(id) {

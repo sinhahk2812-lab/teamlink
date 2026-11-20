@@ -36,6 +36,7 @@ class Store {
     try { this.db.exec('ALTER TABLE messages ADD COLUMN mentions TEXT'); } catch {} // 1.10.0: @mentions in groups
     // 1.11.0: delete for everyone. "tombs" remembers a delete that arrives before its message.
     try { this.db.exec('ALTER TABLE messages ADD COLUMN deleted INTEGER DEFAULT 0'); } catch {}
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN reactions TEXT'); } catch {} // 1.12.0: {userId: [emoji, time]}
     this.db.exec('CREATE TABLE IF NOT EXISTS tombs(id TEXT NOT NULL, sender TEXT NOT NULL, ts INTEGER, PRIMARY KEY(id, sender))');
     this.db.exec('CREATE TABLE IF NOT EXISTS subs(conv TEXT NOT NULL, id TEXT NOT NULL, name TEXT, created INTEGER, PRIMARY KEY(conv, id))');
     try { this.db.exec('ALTER TABLE messages ADD COLUMN locked INTEGER DEFAULT 0'); } catch {}
@@ -89,6 +90,7 @@ class Store {
   static row(m) {
     if (!m) return m;
     for (const k of ['files', 'recipients', 'delivered', 'read_by']) m[k] = m[k] ? JSON.parse(m[k]) : [];
+    m.reactions = m.reactions ? JSON.parse(m.reactions) : {};
     m.quote = m.quote ? JSON.parse(m.quote) : null;
     m.mentions = m.mentions ? JSON.parse(m.mentions) : [];
     return m;
@@ -121,7 +123,7 @@ class Store {
   // "Delete for everyone": the row stays as an empty marker so the chat shows that something was removed.
   tombstone(id) {
     this.run('DELETE FROM files WHERE msg=?', id);
-    this.run("UPDATE messages SET body='', quote=NULL, mentions=NULL, sealed=0, locked=0, fwd=0, unread=0, deleted=1 WHERE id=?", id);
+    this.run("UPDATE messages SET body='', quote=NULL, mentions=NULL, reactions=NULL, sealed=0, locked=0, fwd=0, unread=0, deleted=1 WHERE id=?", id);
   }
   // "Delete for me": gone from this computer only.
   removeMessage(id) { this.run('DELETE FROM files WHERE msg=?', id); this.run('DELETE FROM messages WHERE id=?', id); }

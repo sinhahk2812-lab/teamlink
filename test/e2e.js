@@ -205,6 +205,25 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   await assert.rejects(B.forward({ id: s1.id, convs: ['dm:' + C.me.id] }), /cannot be forwarded/);
   ok('forward a message with its attachment; sealed messages are refused');
 
+  // emoji reactions: one per person, toggle, replace, shared with the whole chat (the group is A and B by now)
+  const rx = await B.send({ conv: g.id, text: 'logo final ho gaya' });
+  await until('rx arrives', () => msgs(A, g.id).some((m) => m.id === rx.id));
+  const rv = (m) => msgs(m, g.id).find((x) => x.id === rx.id).reactions;
+  const reactedEvents = []; B.on('event', (e, d) => { if (e === 'reacted') reactedEvents.push(d.emoji); });
+  A.react({ id: rx.id, emoji: '👍' }); B.react({ id: rx.id, emoji: '👍' });
+  await until('two thumbs on both', () => [A, B].every((m) => rv(m).length === 1 && rv(m)[0].count === 2 && rv(m)[0].mine));
+  assert.deepEqual(reactedEvents, ['👍']); // the author is told about A's reaction, not about their own
+  A.react({ id: rx.id, emoji: '❤️' }); // changing replaces my reaction
+  await until('replaced', () => [A, B].every((m) => rv(m).length === 2 && rv(m).every((r) => r.count === 1)));
+  A.react({ id: rx.id, emoji: '❤️' }); // same emoji again takes it back
+  await until('removed', () => [A, B].every((m) => rv(m).length === 1 && rv(m)[0].emoji === '👍' && rv(m)[0].count === 1));
+  // C was removed from this group earlier: its reaction frame is ignored
+  C.sendJson(A.me.id, { t: 'react', id: 'react:forced', mid: rx.id, emoji: '😂', ts: Date.now() });
+  await sleep(250);
+  assert.equal(rv(A).length, 1);
+  assert.throws(() => A.react({ id: s1.id, emoji: '👍' }), /Sealed/);
+  ok('emoji reactions: add, replace and remove sync to the chat; outsiders and sealed messages are refused');
+
   // delete for everyone / delete for me
   const dPng = path.join(tmp, 'secret.png'); fs.writeFileSync(dPng, crypto.randomBytes(20000));
   const dm1 = await B.send({ conv: g.id, text: 'wrong price 4500, ignore', paths: [dPng] });
