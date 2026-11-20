@@ -269,6 +269,7 @@ function renderSide() {
       h('div', { class: 'body' },
         h('div', { class: 'top' }, h('span', { class: 'name' }, convName(c)), last && h('span', { class: 'time' }, fmtWhen(last.ts))),
         h('div', { class: 'sub' }, sub)),
+      c.mentions ? h('span', { class: 'badge at', title: 'You were mentioned' }, '@') : null,
       c.unread ? h('span', { class: 'badge' }, String(c.unread)) : null), 'ping');
   }));
 
@@ -410,7 +411,8 @@ function renderHead() {
   $('lockBtn').hidden = c.type !== 'dm';
   $('lockBtn').classList.toggle('on', S.locked);
   $('composer').hidden = !!c.left;
-  $('input').placeholder = S.locked ? 'Locked message: the receiver must type their lock password to open it.' : S.sealed ? 'Sealed message: the receiver must click to open it.' : 'Write a message. Paste a screenshot with Ctrl+V.';
+  const canTag = c.type !== 'dm' && !c.left;
+  $('input').placeholder = canTag && !S.sealed ? 'Write a message. Type @ to mention someone.' : S.locked ? 'Locked message: the receiver must type their lock password to open it.' : S.sealed ? 'Sealed message: the receiver must click to open it.' : 'Write a message. Paste a screenshot with Ctrl+V.';
 }
 
 function linkify(text) {
@@ -521,7 +523,7 @@ function msgNode(m, c, showWho) {
     if (m.quote) bubble.append(h('span', { class: 'quote', onclick: () => jumpTo(m.quote.id) }, h('b', null, memberName(c, m.quote.sender)), h('span', null, m.quote.text)));
     if (m.auto) bubble.append(h('span', { class: 'tag' }, 'Automatic reply'));
     if (m.fwd) bubble.append(h('span', { class: 'tag' }, '↪ Forwarded'));
-    if (m.body) bubble.append(...linkify(m.body));
+    if (m.body) bubble.append(...tagify(linkify(m.body), m, c));
     for (const f of m.files) bubble.append(fileNode(m, f));
     const waiting = m.mine ? 0 : m.files.filter((f) => f.state === 'remote' && !(S.progress.get(f.fid) || {}).state).length;
     if (waiting > 1) bubble.append(h('div', { class: 'file-all' }, h('button', { onclick: () => downloadAll(m) }, `Download all ${waiting} files`)));
@@ -540,7 +542,7 @@ function msgNode(m, c, showWho) {
   const acts = !m.hidden && !m.sealed && h('div', { class: 'acts' },
     !c.left && h('button', { title: 'Reply with a quote', onclick: () => { S.replyTo = m; renderReply(); $('input').focus(); } }, '↩'),
     h('button', { title: 'Forward to other people', onclick: () => forwardDialog(m) }, '↪'));
-  return freshClass(m, h('div', { class: 'msg' + (m.mine ? ' mine' : ''), 'data-id': m.id },
+  return freshClass(m, h('div', { class: 'msg' + (m.mine ? ' mine' : '') + (m.mentionsMe ? ' tagged' : ''), 'data-id': m.id },
     showWho && h('div', { class: 'who' }, memberName(c, m.sender)), h('div', { class: 'line' }, bubble, acts)));
 }
 
@@ -680,7 +682,7 @@ async function send() {
   if (!text.trim() && !S.pending.length) return;
   sending = true; $('sendBtn').disabled = true;
   try {
-    await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, sub: S.sub || undefined, paths: S.pending.map((a) => a.path) });
+    await call('send', { conv: S.active, text, sealed: S.sealed, locked: S.locked, replyTo: S.replyTo ? S.replyTo.id : undefined, sub: S.sub || undefined, mentions: draftMentions(text), paths: S.pending.map((a) => a.path) });
     $('input').value = ''; autoGrow(); toggleEmoji(false);
     const sb = $('sendBtn'); sb.classList.remove('launch', 'ready'); void sb.offsetWidth; sb.classList.add('launch'); setTimeout(() => sb.classList.remove('launch'), 600);
     S.pending = []; S.sealed = false; S.locked = false; S.replyTo = null; renderPending(); renderReply(); renderHead();
@@ -689,7 +691,75 @@ async function send() {
 function autoGrow() { const t = $('input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, 140) + 'px'; }
 $('input').addEventListener('input', autoGrow);
 $('input').addEventListener('input', () => $('sendBtn').classList.toggle('ready', !!$('input').value.trim()));
-$('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+// ---------------------------------------------------------------- @mentions (tags) in groups and the Everyone channel
+const tagged = new Map(); // "@Name" as typed in this draft -> member id (or 'all')
+let tagPick = 0, tagList = [];
+function tagCandidates() {
+  const c = S.convs.get(S.active);
+  if (!c || c.type === 'dm' || c.left) return [];
+  const people = c.type === 'all' ? [...S.peers.values()].map((p) => ({ id: p.id, name: p.name })) : c.members.filter((m) => m.id !== S.me.id).map((m) => ({ id: m.id, name: memberName(c, m.id) }));
+  return [{ id: 'all', name: 'all', note: 'Everyone in this chat' }, ...people.sort((a, b) => a.name.localeCompare(b.name))];
+}
+function tagQuery() {
+  const t = $('input'), before = t.value.slice(0, t.selectionStart);
+  const m = /(^|\s)@([^\s@]{0,30})$/.exec(before);
+  return m ? { text: m[2].toLowerCase(), start: before.length - m[2].length - 1 } : null;
+}
+function tagRender() {
+  const q = tagQuery(), pop = $('mentionPop');
+  tagList = q ? tagCandidates().filter((p) => p.name.toLowerCase().split(/\s+/).some((w) => w.startsWith(q.text)) || p.name.toLowerCase().startsWith(q.text)).slice(0, 8) : [];
+  pop.hidden = !tagList.length;
+  if (!tagList.length) return;
+  tagPick = Math.min(tagPick, tagList.length - 1);
+  pop.replaceChildren(...tagList.map((p, i) => h('div', { class: 'mrow' + (i === tagPick ? ' on' : ''), onmousedown: (e) => { e.preventDefault(); tagChoose(p); } },
+    p.id === 'all' ? h('span', { class: 'avatar' }, '@') : avatar(p.id, p.name), h('span', null, '@' + p.name), p.note && h('small', null, p.note))));
+}
+function tagChoose(p) {
+  const t = $('input'), q = tagQuery();
+  if (!q) return;
+  const word = '@' + p.name;
+  t.value = t.value.slice(0, q.start) + word + ' ' + t.value.slice(t.selectionStart);
+  t.selectionStart = t.selectionEnd = q.start + word.length + 1;
+  tagged.set(word, p.id);
+  tagPick = 0; $('mentionPop').hidden = true; tagList = [];
+  autoGrow(); t.focus();
+}
+// Which of the people picked in this draft are still mentioned in the final text.
+function draftMentions(text) {
+  const ids = [...tagged].filter(([word]) => text.includes(word)).map(([, id]) => id);
+  tagged.clear();
+  return ids.length ? [...new Set(ids)] : undefined;
+}
+// Highlights "@Name" for the people a message tags.
+function tagify(parts, m, c) {
+  if (!m.mentions || !m.mentions.length) return parts;
+  const names = m.mentions.map((id) => ({ id, word: '@' + (id === 'all' ? 'all' : memberName(c, id)) })).sort((a, b) => b.word.length - a.word.length);
+  const out = [];
+  for (const part of parts) {
+    if (typeof part !== 'string') { out.push(part); continue; }
+    let rest = part;
+    while (rest) {
+      let at = -1, hit = null;
+      for (const n of names) { const i = rest.indexOf(n.word); if (i >= 0 && (at < 0 || i < at)) { at = i; hit = n; } }
+      if (!hit) { out.push(rest); break; }
+      if (at) out.push(rest.slice(0, at));
+      out.push(h('span', { class: 'mention' + (hit.id === S.me.id || (hit.id === 'all' && !m.mine) ? ' me' : '') }, hit.word));
+      rest = rest.slice(at + hit.word.length);
+    }
+  }
+  return out;
+}
+$('input').addEventListener('input', () => { tagPick = 0; tagRender(); });
+$('input').addEventListener('click', tagRender);
+$('input').addEventListener('blur', () => setTimeout(() => { $('mentionPop').hidden = true; }, 150));
+$('input').addEventListener('keydown', (e) => {
+  if (!$('mentionPop').hidden && tagList.length) { // the tag list takes the arrow keys, Enter, Tab and Esc while it is open
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); tagPick = (tagPick + (e.key === 'ArrowDown' ? 1 : tagList.length - 1)) % tagList.length; return tagRender(); }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return tagChoose(tagList[tagPick]); }
+    if (e.key === 'Escape') { e.stopPropagation(); $('mentionPop').hidden = true; return; }
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+});
 $('sendBtn').addEventListener('click', send);
 $('sealBtn').addEventListener('click', () => { S.sealed = !S.sealed; if (!S.sealed) S.locked = false; renderHead(); });
 $('lockBtn').addEventListener('click', () => { S.locked = !S.locked; S.sealed = S.locked || S.sealed; renderHead(); });
@@ -1093,6 +1163,7 @@ function multiDialog() {
 }
 $('multiBtn').addEventListener('click', multiDialog);
 $('newGroupBtn').addEventListener('click', () => groupDialog(null));
+$('newGroupLink').addEventListener('click', () => groupDialog(null));
 $('groupEditBtn').addEventListener('click', () => groupDialog(S.convs.get(S.active)));
 
 // ---------------------------------------------------------------- updates (desktop app only)

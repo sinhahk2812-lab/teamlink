@@ -130,7 +130,22 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   B.markRead(g.id); // nothing of B's own to confirm
   A.markRead(g.id); C.markRead(g.id);
   await until('group seen', () => msgs(B, g.id)[0].seen === 2);
-  ok('group chat reaches LAN and relay members');
+  // @mentions: tag one member, or everyone; only people in the group can be tagged
+  const tagEvents = []; C.on('event', (e, d) => { if (e === 'incoming' && d.conv === g.id) tagEvents.push(d.mention); });
+  const tm = await B.send({ conv: g.id, text: '@Chen please check the logo', mentions: [C.me.id, X.me.id, 'nonsense'] });
+  assert.deepEqual(tm.mentions, [C.me.id]); // the outsider and the junk id were dropped
+  await until('mention arrives', () => msgs(C, g.id).some((m) => m.id === tm.id) && msgs(A, g.id).some((m) => m.id === tm.id));
+  assert.ok(msgs(C, g.id).find((m) => m.id === tm.id).mentionsMe && !msgs(A, g.id).find((m) => m.id === tm.id).mentionsMe);
+  assert.deepEqual([C.getState().convs.find((c) => c.id === g.id).mentions, A.getState().convs.find((c) => c.id === g.id).mentions], [1, 0]);
+  assert.equal(tagEvents[tagEvents.length - 1], true);
+  C.markRead(g.id);
+  assert.equal(C.getState().convs.find((c) => c.id === g.id).mentions, 0);
+  const ta = await B.send({ conv: g.id, text: '@all meeting at 5', mentions: ['all'] });
+  await until('@all arrives', () => msgs(A, g.id).some((m) => m.id === ta.id && m.mentionsMe) && msgs(C, g.id).some((m) => m.id === ta.id && m.mentionsMe));
+  assert.ok(!ta.mentionsMe);
+  assert.deepEqual((await A.send({ conv: 'dm:' + B.me.id, text: '@Bilal hi', mentions: [B.me.id] })).mentions, []); // no tags in private chats
+  A.markRead(g.id); C.markRead(g.id);
+  ok('group chat reaches LAN and relay members; @mention tags one member or @all, with a mention count');
   A.updateGroup({ conv: g.id, name: 'Design Team', members: [B.me.id] });
   await until('group update', () => B.store.conv(g.id).name === 'Design Team' && C.store.conv(g.id).left_group === 1);
   await assert.rejects(C.send({ conv: g.id, text: 'still here?' }));

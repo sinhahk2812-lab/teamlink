@@ -150,7 +150,7 @@ function startServer(messenger, { port = 0, token } = {}) {
     // WHATSAPP-INTAKE: end
     getState: () => messenger.getState(),
     getMessages: (p) => messenger.getMessages(p),
-    send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, locked: p.locked, replyTo: p.replyTo, sub: p.sub || undefined, paths: (p.paths || []).map(String) }),
+    send: (p) => messenger.send({ conv: String(p.conv), text: p.text, sealed: p.sealed, locked: p.locked, replyTo: p.replyTo, sub: p.sub || undefined, mentions: p.mentions, paths: (p.paths || []).map(String) }),
     markRead: (p) => messenger.markRead(String(p.conv), p.sub ? String(p.sub) : undefined),
     createSub: (p) => messenger.createSub(p),
     deleteSub: (p) => messenger.deleteSub(p),

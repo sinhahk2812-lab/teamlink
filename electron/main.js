@@ -133,7 +133,7 @@ function onIncoming(d) {
   const prefs = messenger.popupPrefs();
   popupCount += 1;
   popupData = { conv: d.conv, count: popupCount, body: prefs.showText ? (conv.last && conv.last.preview) || 'New message' : 'New message',
-    title: conv.type === 'dm' ? who : `${who} · ${conv.type === 'all' ? 'Everyone' : conv.name || 'Group'}`, ...popupFace(d.from, who) };
+    title: conv.type === 'dm' ? who : `${who}${d.mention ? ' mentioned you' : ''} · ${conv.type === 'all' ? 'Everyone' : conv.name || 'Group'}`, ...popupFace(d.from, who) };
   showPopup();
   if (prefs.sound) shell.beep();
 }

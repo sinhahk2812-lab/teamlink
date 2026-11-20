@@ -370,7 +370,7 @@ class Messenger extends EventEmitter {
     return id;
   }
 
-  async send({ conv: convId, text, sealed, locked, replyTo, paths, auto, fwd, readyFiles, sub }) {
+  async send({ conv: convId, text, sealed, locked, replyTo, paths, auto, fwd, readyFiles, sub, mentions }) {
     if (convId.startsWith('dm:')) { if (!this.peers.has(convId.slice(3))) throw new Error('Unknown member'); this.ensureDm(convId.slice(3)); }
     const conv = this.store.conv(convId);
     if (!conv) throw new Error('Unknown conversation');
@@ -389,10 +389,12 @@ class Messenger extends EventEmitter {
     let quote = null;
     const q = replyTo ? this.store.message(String(replyTo)) : null;
     if (q && q.conv === convId && !q.sealed) quote = { id: q.id, sender: q.sender, text: q.body.trim().slice(0, 200) || 'Attachment' };
-    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, sub: subInfo && subInfo.id, opened: 1, auto, recipients });
+    // @mentions (tags): only in groups and the Everyone channel, only people who are in the chat, or 'all'
+    const tags = conv.type === 'dm' ? [] : [...new Set(Array.isArray(mentions) ? mentions : [])].filter((u) => u === 'all' || recipients.includes(u)).slice(0, 50);
+    this.store.addMessage({ id, conv: convId, sender: this.me.id, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, sub: subInfo && subInfo.id, mentions: tags, opened: 1, auto, recipients });
     for (const f of files) this.store.saveFile({ ...f, msg: id, owner: this.me.id, state: 'local' });
     this.store.touchConv(convId, ts);
-    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, sub: subInfo || undefined, auto: !!auto,
+    const frame = { t: 'msg', id, conv: conv.type === 'dm' ? 'dm' : convId, ts, body, sealed: isSealed, locked: isLocked, quote, fwd: !!fwd, sub: subInfo || undefined, mentions: tags.length ? tags : undefined, auto: !!auto,
       files: files.map(({ fid, name, size, mime }) => ({ fid, name, size, mime })) };
     for (const r of recipients) this.deliver(r, frame);
     const view = this.msgView(this.store.message(id));
@@ -481,6 +483,7 @@ class Messenger extends EventEmitter {
     const convId = this.convFromWire(from, f.conv);
     if (!convId) return;
     const subId = this.adoptSub(convId, f.sub);
+    const tags = f.conv === 'dm' ? [] : (Array.isArray(f.mentions) ? f.mentions : []).filter((u) => u === 'all' || /^[0-9a-f]{20}$/.test(String(u))).slice(0, 50);
     const ts = Math.min(Number(f.ts) || Date.now(), Date.now());
     const sealed = !!f.sealed && f.conv === 'dm';
     const files = Array.isArray(f.files) ? f.files.slice(0, 2000) : [];
@@ -489,7 +492,7 @@ class Messenger extends EventEmitter {
       quote = { id: String(f.quote.id || '').slice(0, 64), sender: f.quote.sender, text: String(f.quote.text || '').slice(0, 200) };
     }
     const fresh = this.store.addMessage({ id: f.id, conv: convId, sender: from, ts, body: String(f.body || '').slice(0, 20000), sealed,
-      locked: sealed && !!f.locked, quote, fwd: !!f.fwd, sub: subId, auto: !!f.auto, unread: 1 });
+      locked: sealed && !!f.locked, quote, fwd: !!f.fwd, sub: subId, mentions: tags, auto: !!f.auto, unread: 1 });
     this.ack(from, f.id);
     if (!fresh) return;
     for (const x of files) {
@@ -502,7 +505,7 @@ class Messenger extends EventEmitter {
     if (!sealed) this.autoFetchImages(m);
     this.ev('message', this.msgView(m));
     this.ev('conv', this.convView(this.store.conv(convId)));
-    this.ev('incoming', { conv: convId, from, id: f.id });
+    this.ev('incoming', { conv: convId, from, id: f.id, mention: tags.includes(this.me.id) || tags.includes('all') });
 
     // Absence mode: answer once per person, never answer an auto-reply (ping-pong protection).
     if (f.conv === 'dm' && !f.auto && this.cfg.status === 'away' && this.cfg.absenceMsg && !this.autoReplied.has(from)) {
@@ -615,7 +618,7 @@ class Messenger extends EventEmitter {
       fid: f.fid, name: f.name, size: f.size, image: !!f.mime, state: f.state, path: f.state === 'local' || f.state === 'done' ? f.path : null,
     }));
     return { id: m.id, conv: m.conv, sender: m.sender, mine: m.sender === this.me.id, ts: m.ts, body: hidden ? '' : m.body,
-      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, sub: m.sub || '', quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
+      sealed: !!m.sealed, locked: !!m.locked, fwd: !!m.fwd, sub: m.sub || '', mentions: m.mentions, mentionsMe: m.sender !== this.me.id && (m.mentions.includes(this.me.id) || m.mentions.includes('all')), quote: hidden ? null : m.quote, hidden, opened: !!m.opened, hideAt: shown && !hidden ? shown.until : 0, auto: !!m.auto, files, recipients: m.recipients.length, delivered: m.delivered.length, seen: m.read_by.length, readAt: m.read_at };
   }
 
   convView(c) {
@@ -626,7 +629,7 @@ class Messenger extends EventEmitter {
       else preview = last.body.trim().slice(0, 80) || (this.store.filesOf(last.id).length ? 'Attachment' : '');
     }
     return { id: c.id, type: c.type, name: c.name, members: c.members.map((m) => ({ id: m.id, name: m.name })), left: !!c.left_group,
-      updated: c.updated, unread: this.store.unread(c.id), unreadMain: this.store.unreadMain(c.id), subs: this.store.subs(c.id), last: last ? { sender: last.sender, ts: last.ts, preview } : null };
+      updated: c.updated, unread: this.store.unread(c.id), unreadMain: this.store.unreadMain(c.id), mentions: this.store.unreadMentions(c.id, this.me.id), subs: this.store.subs(c.id), last: last ? { sender: last.sender, ts: last.ts, preview } : null };
   }
 
   // ------------------------------------------------------------------ groups

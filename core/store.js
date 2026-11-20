@@ -33,6 +33,7 @@ class Store {
     try { this.db.exec('ALTER TABLE messages ADD COLUMN fwd INTEGER DEFAULT 0'); } catch {} // 1.2.0: forwarded
     // 1.6.0: sub-chats (named topics inside a conversation)
     try { this.db.exec('ALTER TABLE messages ADD COLUMN sub TEXT'); } catch {}
+    try { this.db.exec('ALTER TABLE messages ADD COLUMN mentions TEXT'); } catch {} // 1.10.0: @mentions in groups
     this.db.exec('CREATE TABLE IF NOT EXISTS subs(conv TEXT NOT NULL, id TEXT NOT NULL, name TEXT, created INTEGER, PRIMARY KEY(conv, id))');
     try { this.db.exec('ALTER TABLE messages ADD COLUMN locked INTEGER DEFAULT 0'); } catch {}
     this._stmts = new Map();
@@ -86,6 +87,7 @@ class Store {
     if (!m) return m;
     for (const k of ['files', 'recipients', 'delivered', 'read_by']) m[k] = m[k] ? JSON.parse(m[k]) : [];
     m.quote = m.quote ? JSON.parse(m.quote) : null;
+    m.mentions = m.mentions ? JSON.parse(m.mentions) : [];
     return m;
   }
   addMessage(m) {
@@ -93,7 +95,8 @@ class Store {
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
       m.id, m.conv, m.sender, m.ts, m.body || '', JSON.stringify(m.files || []), m.sealed ? 1 : 0, m.opened ? 1 : 0,
       m.auto ? 1 : 0, m.unread ? 1 : 0, JSON.stringify(m.recipients || []), JSON.stringify(m.delivered || []));
-    if (r.changes && (m.quote || m.locked || m.fwd || m.sub)) this.run('UPDATE messages SET quote=?, locked=?, fwd=?, sub=? WHERE id=?', m.quote ? JSON.stringify(m.quote) : null, m.locked ? 1 : 0, m.fwd ? 1 : 0, m.sub || null, m.id);
+    const tagged = m.mentions && m.mentions.length ? JSON.stringify(m.mentions) : null;
+    if (r.changes && (m.quote || m.locked || m.fwd || m.sub || tagged)) this.run('UPDATE messages SET quote=?, locked=?, fwd=?, sub=?, mentions=? WHERE id=?', m.quote ? JSON.stringify(m.quote) : null, m.locked ? 1 : 0, m.fwd ? 1 : 0, m.sub || null, tagged, m.id);
     return r.changes > 0;
   }
   message(id) { return Store.row(this.get('SELECT * FROM messages WHERE id=?', id)); }
@@ -112,6 +115,8 @@ class Store {
     this.run('UPDATE messages SET sub=NULL WHERE conv=? AND sub=?', conv, id);
     this.run('DELETE FROM subs WHERE conv=? AND id=?', conv, id);
   }
+  // unread messages in this chat that tag me (or @all)
+  unreadMentions(conv, me) { return this.get(`SELECT COUNT(*) n FROM messages WHERE conv=? AND unread=1 AND (mentions LIKE ? OR mentions LIKE '%"all"%')`, conv, `%"${me}"%`).n; }
   unreadMain(conv) { return this.get('SELECT COUNT(*) n FROM messages WHERE conv=? AND unread=1 AND sub IS NULL', conv).n; }
   lastMessage(conv) {
     return Store.row(this.get('SELECT * FROM messages WHERE conv=? ORDER BY ts DESC, rowid DESC LIMIT 1', conv));
