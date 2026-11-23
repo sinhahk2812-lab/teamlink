@@ -142,7 +142,9 @@ class Lan extends EventEmitter {
 
   // Resolves true once the frame is handed to the kernel (waits for drain => natural backpressure).
   async send(peerId, host, port, payload) {
-    let sock = [...(this.conns.get(peerId) || [])].filter((s) => !s.destroyed && s.writable).pop();
+    // Always the oldest live connection to that peer: if a second one appears in the middle of a file transfer,
+    // the remaining pieces must not switch to it, or they could arrive out of order.
+    let sock = [...(this.conns.get(peerId) || [])].find((s) => !s.destroyed && s.writable);
     if (!sock) sock = await this._dial(peerId, host, port);
     if (!sock || sock.destroyed) return false;
     try {
@@ -157,6 +159,10 @@ class Lan extends EventEmitter {
       return false;
     }
   }
+
+  // Flow control for file downloads: stop reading from a peer while the disk catches up.
+  pausePeer(peerId) { for (const s of this.conns.get(peerId) || []) s.pause(); }
+  resumePeer(peerId) { for (const s of this.conns.get(peerId) || []) s.resume(); }
 
   stop() {
     for (const set of this.conns.values()) for (const s of set) s.destroy();

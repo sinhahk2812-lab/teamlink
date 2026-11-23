@@ -110,9 +110,14 @@ class Store {
   }
   message(id) { return Store.row(this.get('SELECT * FROM messages WHERE id=?', id)); }
   // sub: undefined = everything, '' = the main chat only, otherwise one sub-chat
-  messages(conv, before, limit, sub) {
+  // beforeId: load the page that comes just before that message (older history, for scrolling up).
+  // Paging is by (time, row), not time alone, so messages that share a millisecond are never skipped or repeated.
+  messages(conv, before, limit, sub, beforeId) {
     const filter = sub === undefined ? '' : sub ? ' AND sub=?' : ' AND sub IS NULL';
     const args = sub ? [conv, sub] : [conv];
+    const edge = beforeId ? this.get('SELECT ts, rowid r FROM messages WHERE id=?', beforeId) : null;
+    if (edge) return this.all(`SELECT * FROM messages WHERE conv=?${filter} AND (ts<? OR (ts=? AND rowid<?)) ORDER BY ts DESC, rowid DESC LIMIT ?`,
+      ...args, edge.ts, edge.ts, edge.r, limit || 60).map(Store.row).reverse();
     return this.all(`SELECT * FROM messages WHERE conv=?${filter} AND ts<? ORDER BY ts DESC, rowid DESC LIMIT ?`,
       ...args, before || Number.MAX_SAFE_INTEGER, limit || 60).map(Store.row).reverse();
   }

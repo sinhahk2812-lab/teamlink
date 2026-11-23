@@ -231,6 +231,31 @@ const ok = (s) => console.log(`  ok ${++step} - ${s}`);
   assert.equal(sha(cTarget), sha(bigC));
   ok('a download can be cancelled half way (partial file removed, sender stops) and started again');
 
+  // the sender saved the file again after sending it (a new export with the same name): the download still works
+  const reexport = path.join(tmp, 'final_export.mp4'); fs.writeFileSync(reexport, crypto.randomBytes(300000));
+  const rm2 = await A.send({ conv: 'dm:' + C.me.id, paths: [reexport] });
+  const rfile = await until('offer', () => C.store.filesOf(rm2.id)[0]);
+  fs.writeFileSync(reexport, crypto.randomBytes(450000)); // exported again, different size
+  await C.download(rfile.fid, path.join(tmp, 'Chen', 'final_export.mp4'));
+  await until('changed file downloads', () => C.store.file(rfile.fid).state === 'done');
+  assert.equal(sha(path.join(tmp, 'Chen', 'final_export.mp4')), sha(reexport));
+  assert.equal(C.store.file(rfile.fid).size, 450000);
+  // a deleted file gives a clear message instead of a time-out
+  const gone = path.join(tmp, 'deleted.bin'); fs.writeFileSync(gone, crypto.randomBytes(1000));
+  const gm = await A.send({ conv: 'dm:' + C.me.id, paths: [gone] });
+  const gfile = await until('offer 2', () => C.store.filesOf(gm.id)[0]);
+  fs.rmSync(gone);
+  const goneErr = []; C.on('event', (e, d) => { if (e === 'file' && d.fid === gfile.fid && d.error) goneErr.push(d.error); });
+  await C.download(gfile.fid, path.join(tmp, 'Chen', 'deleted.bin'));
+  await until('clear error', () => goneErr.length === 1);
+  assert.match(goneErr[0], /moved or deleted this file/);
+  // history pages: scrolling up must reach every older message, with none skipped or repeated
+  for (let i = 1; i <= 150; i++) B.store.addMessage({ id: 'hist' + String(i).padStart(4, '0'), conv: 'dm:' + X.me.id, sender: B.me.id, ts: 1000 + Math.floor(i / 10), body: 'old ' + i, recipients: [] });
+  let page = B.getMessages({ conv: 'dm:' + X.me.id, limit: 40 }), all = [...page];
+  while (page.length) { page = B.getMessages({ conv: 'dm:' + X.me.id, limit: 40, beforeId: all[0].id }); all = [...page, ...all]; }
+  assert.deepEqual(all.map((m) => m.body), Array.from({ length: 150 }, (_, i) => 'old ' + (i + 1)));
+  ok('downloads survive a re-saved file, report a deleted one clearly; history pages reach every older message');
+
   // typing hint: reaches the other person in a private chat and the members of a group, never the Everyone channel
   const typed = []; const listen = (m, tag) => m.on('event', (e, d) => { if (e === 'typing') typed.push(tag + ':' + d.conv + ':' + d.from.slice(0, 4)); });
   listen(A, 'A'); listen(B, 'B'); listen(C, 'C');

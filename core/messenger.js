@@ -349,7 +349,7 @@ class Messenger extends EventEmitter {
     let f;
     try { f = JSON.parse(plain.subarray(1).toString()); } catch { return; }
     try {
-      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete, react: this.onReact, pin: this.onPin, edit: this.onEdit, typing: this.onTyping, fcancel: this.onFileCancel }[f.t];
+      const handler = { msg: this.onMsg, ack: this.onAck, read: this.onRead, group: this.onGroup, fget: this.onFileGet, fend: this.onFileEnd, avget: this.onAvatarGet, av: this.onAvatar, sub: this.onSub, del: this.onDelete, react: this.onReact, pin: this.onPin, edit: this.onEdit, typing: this.onTyping, fcancel: this.onFileCancel, fmeta: this.onFileMeta }[f.t];
       if (handler) handler.call(this, from, f);
       else this.intake.onFrame(from, f); // WHATSAPP-INTAKE
     } catch (e) {
@@ -903,7 +903,7 @@ class Messenger extends EventEmitter {
     const d = { xid, fid, from: f.owner, target, tmp: target + '.part', size: f.size, got: 0, seq: 0, last: Date.now(), shown: 0 };
     d.out = fs.createWriteStream(d.tmp);
     d.out.on('error', (e) => this.endDownload(d, /EPERM|EACCES/.test(e.message) ? 'Windows does not allow saving in that folder. Choose another place.' : /ENOSPC/.test(e.message) ? 'The disk is full.' : e.message));
-    d.watch = setInterval(() => { if (Date.now() - d.last > 30000) this.endDownload(d, 'Transfer timed out'); }, 5000);
+    d.watch = setInterval(() => { if (!d.paused && Date.now() - d.last > 45000) this.endDownload(d, 'The download stopped: the sender is not answering. Try again.'); }, 5000);
     this.downloads.set(xid, d);
     this.fileState(f, 'downloading', 0);
     if (!(await this.sendJson(f.owner, { t: 'fget', fid, xid }))) this.endDownload(d, 'The sender is offline right now');
@@ -948,7 +948,13 @@ class Messenger extends EventEmitter {
     if (seq !== d.seq++ || d.got + data.length > d.size) return this.endDownload(d, 'Transfer corrupted');
     d.got += data.length;
     d.last = Date.now();
-    d.out.write(data);
+    // The network can be faster than the disk (a big video onto a hard disk, or while antivirus scans it). When the
+    // disk falls behind, stop reading from the sender until it has caught up, instead of piling the file up in memory.
+    if (!d.out.write(data) && !d.paused && this.peers.get(from) && this.peers.get(from).lan) {
+      d.paused = true;
+      this.lan.pausePeer(from);
+      d.out.once('drain', () => { d.paused = false; d.last = Date.now(); this.lan.resumePeer(from); });
+    }
     if (d.last - d.shown > 200) {
       d.shown = d.last;
       const f = this.store.file(d.fid);
@@ -962,6 +968,16 @@ class Messenger extends EventEmitter {
     if (!f.ok) return this.endDownload(d, clip(f.error, 100) || 'Transfer failed');
     if (d.got !== d.size) return this.endDownload(d, 'Transfer incomplete');
     this.endDownload(d, null);
+  }
+
+  // The sender's file is not the size announced in the message any more (it was saved again after sending):
+  // take the current size, so the download gives the file as it is now instead of failing.
+  onFileMeta(from, f) {
+    const d = this.downloads.get(String(f.xid));
+    const size = Number(f.size);
+    if (!d || d.from !== from || !(size >= 0) || d.got) return;
+    d.size = size;
+    this.store.run('UPDATE files SET size=? WHERE fid=?', size, d.fid);
   }
 
   // The receiver stops a download: the partial file is removed and the sender is told to stop sending.
@@ -1001,6 +1017,7 @@ class Messenger extends EventEmitter {
 
   endDownload(d, error) {
     if (!this.downloads.delete(d.xid)) return;
+    if (d.paused) { d.paused = false; this.lan.resumePeer(d.from); }
     clearInterval(d.watch);
     const f = this.store.file(d.fid);
     d.out.end(() => {
@@ -1023,24 +1040,33 @@ class Messenger extends EventEmitter {
     if (!f || f.owner !== this.me.id || !m || !m.recipients.includes(from)) return fail('File not available');
     let fd;
     try {
-      fd = await fs.promises.open(f.path, 'r');
-      if ((await fd.stat()).size !== f.size) throw new Error('changed');
+      try { fd = await fs.promises.open(f.path, 'r'); }
+      catch { return fail('The sender moved or deleted this file. Ask them to send it again.'); }
+      const size = (await fd.stat()).size;
+      if (size !== f.size) { // saved again since it was sent: send the file as it is now
+        this.store.run('UPDATE files SET size=? WHERE fid=?', size, f.fid);
+        await this.sendJson(from, { t: 'fmeta', xid, size });
+      }
       const head = Buffer.alloc(13);
       head[0] = 1;
       Buffer.from(xid, 'hex').copy(head, 1);
       const buf = Buffer.alloc(CHUNK);
       let seq = 0, pos = 0;
-      while (pos < f.size) {
+      while (pos < size) {
         const { bytesRead } = await fd.read(buf, 0, CHUNK, pos);
-        if (!bytesRead) throw new Error('short read');
+        if (!bytesRead) return fail('The file changed while it was being sent. Try the download again.');
         head.writeUInt32BE(seq++, 9);
         if (this.stopSending && this.stopSending.delete(xid)) return; // the receiver cancelled the download
-        if (!(await this.sendRaw(from, Buffer.concat([head, buf.subarray(0, bytesRead)])))) return;
+        const piece = Buffer.concat([head, buf.subarray(0, bytesRead)]);
+        // A short network hiccup must not kill a long transfer: try the same piece again for a few seconds.
+        let sent = await this.sendRaw(from, piece);
+        for (let tries = 0; !sent && tries < 8; tries++) { await new Promise((r) => setTimeout(r, 1000)); sent = await this.sendRaw(from, piece); }
+        if (!sent) return;
         pos += bytesRead;
       }
       await this.sendJson(from, { t: 'fend', xid, ok: true });
-    } catch {
-      fail('The file was moved or changed on the sender\'s computer');
+    } catch (e) {
+      fail('Sending failed on the sender\'s computer: ' + String(e.message || e).slice(0, 80));
     } finally {
       if (fd) await fd.close().catch(() => {});
     }
@@ -1244,8 +1270,8 @@ class Messenger extends EventEmitter {
     return state;
   }
 
-  getMessages({ conv, before, limit, sub }) {
-    return this.store.messages(String(conv), before, Math.min(Number(limit) || 60, 200), sub === undefined || sub === null ? undefined : String(sub)).map((m) => this.msgView(m));
+  getMessages({ conv, before, limit, sub, beforeId }) {
+    return this.store.messages(String(conv), before, Math.min(Number(limit) || 60, 200), sub === undefined || sub === null ? undefined : String(sub), beforeId ? String(beforeId) : undefined).map((m) => this.msgView(m));
   }
 
   search({ text }) {

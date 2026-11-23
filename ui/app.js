@@ -3,7 +3,7 @@
 const TOKEN = new URLSearchParams(location.search).get('token') || '';
 const desk = window.desktop || null;
 const $ = (id) => document.getElementById(id);
-const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, locked: false, replyTo: null, editing: null, sel: null, starredView: false, sub: '', progress: new Map(), results: null };
+const S = { me: null, net: {}, peers: new Map(), convs: new Map(), active: null, msgs: [], pending: [], sealed: false, locked: false, replyTo: null, editing: null, sel: null, starredView: false, noMore: false, loadingOlder: false, newBelow: 0, sub: '', progress: new Map(), results: null };
 
 // ---------------------------------------------------------------- tiny DOM helpers (text only, never innerHTML)
 function h(tag, props, ...kids) {
@@ -347,6 +347,7 @@ async function openConv(id, focusMsg, sub) {
   $('empty').hidden = true; $('chat').hidden = false;
   renderSide(); renderHead();
   const wantSub = S.sub;
+  S.noMore = false; S.loadingOlder = false; S.newBelow = 0; atBottom = true; renderJump();
   S.msgs = await call('getMessages', { conv: id, sub: wantSub, limit: focusMsg ? 200 : 80 });
   if (S.active !== id || S.sub !== wantSub) return;
   renderMessages(true);
@@ -733,17 +734,56 @@ function openLocked(m) {
 // changed, and elements that are already right are not touched. Rebuilding everything on every event (a download
 // reports progress five times a second) made the message under the mouse flicker.
 const msgCache = new Map(); // key -> { sig, node }
+
+// ---------------------------------------------------------------- scrolling
+// * Scrolling up to the top loads the page of older messages before the first one shown, keeping your place.
+// * While you are at the bottom you stay there, whatever changes the height around the list (typing hint,
+//   attachments, a pinned bar, the window being resized, a picture finishing loading).
+// * While you are reading further up, nothing moves; a button offers to jump to the new messages.
+let atBottom = true;
+const nearBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+function renderJump() {
+  const b = $('jumpBtn');
+  b.hidden = atBottom || !S.active;
+  b.textContent = S.newBelow ? `↓ ${S.newBelow} new` : '↓';
+  b.classList.toggle('has-new', !!S.newBelow);
+}
+async function loadOlder() {
+  if (S.loadingOlder || S.noMore || !S.active || !S.msgs.length) return;
+  S.loadingOlder = true;
+  const conv = S.active, sub = S.sub, box = $('messages');
+  try {
+    const older = await rpc('getMessages', { conv, sub, limit: 60, beforeId: S.msgs[0].id });
+    if (S.active !== conv || S.sub !== sub) return;
+    if (older.length < 60) S.noMore = true;
+    if (!older.length) return renderMessages(false);
+    const height = box.scrollHeight, top = box.scrollTop;
+    S.msgs = [...older, ...S.msgs];
+    renderMessages(false);
+    box.scrollTop = top + (box.scrollHeight - height); // the message you were looking at stays where it was
+  } catch {} finally { S.loadingOlder = false; }
+}
+$('messages').addEventListener('scroll', () => {
+  const box = $('messages'), was = atBottom;
+  atBottom = nearBottom(box);
+  if (atBottom && S.newBelow) S.newBelow = 0;
+  if (atBottom !== was || atBottom) renderJump();
+  if (box.scrollTop < 200) loadOlder();
+});
+new ResizeObserver(() => { const box = $('messages'); if (atBottom) box.scrollTop = box.scrollHeight; }).observe($('messages'));
+$('jumpBtn').addEventListener('click', () => { const box = $('messages'); box.scrollTop = box.scrollHeight; S.newBelow = 0; atBottom = true; renderJump(); markRead(); });
 function renderMessages(toBottom) {
   const box = $('messages');
   const c = S.convs.get(S.active);
   if (!c) return;
-  const stick = toBottom || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const stick = toBottom || atBottom;
   const want = [], used = new Set();
   const keep = (key, sig, make) => {
     let e = msgCache.get(key);
     if (!e || e.sig !== sig) { e = { sig, node: make() }; msgCache.set(key, e); }
     used.add(key); want.push(e.node);
   };
+  if (S.msgs.length && S.noMore) keep('start', 'start', () => h('div', { class: 'notice' }, 'This is the beginning of the chat.'));
   let day = '', prev = null;
   for (const m of S.msgs) {
     const d = fmtDay(m.ts);
@@ -762,7 +802,10 @@ function renderMessages(toBottom) {
     else box.insertBefore(node, at);
   }
   while (at) { const next = at.nextSibling; at.remove(); at = next; }
-  if (stick) { box.scrollTop = box.scrollHeight; for (const img of box.querySelectorAll('img.shot')) if (!img.complete) img.addEventListener('load', () => { box.scrollTop = box.scrollHeight; }, { once: true }); }
+  if (stick) { box.scrollTop = box.scrollHeight; atBottom = true; renderJump(); }
+  // a picture that finishes loading makes the list taller: stay at the bottom if that is where the reader is
+  for (const img of box.querySelectorAll('img.shot')) if (!img.complete && !img.dataset.w) { img.dataset.w = '1'; img.addEventListener('load', () => { if (atBottom) box.scrollTop = box.scrollHeight; }, { once: true }); }
+  if (box.scrollHeight <= box.clientHeight + 200) loadOlder(); // a short page that does not fill the window: fetch more straight away
 }
 
 function onMessage(m) {
@@ -773,6 +816,7 @@ function onMessage(m) {
   const seenNow = (x) => (x.recipients <= 1 ? !!x.readAt : x.seen >= x.recipients);
   if (i >= 0 && m.mine && seenNow(m) && !seenNow(S.msgs[i])) seenAt.set(m.id, Date.now());
   if (i >= 0) S.msgs[i] = m; else S.msgs.push(m);
+  if (i < 0 && !m.mine && !atBottom) { S.newBelow++; renderJump(); }
   renderMessages(i < 0 && m.mine);
   if (i < 0 && !m.mine) markRead();
 }

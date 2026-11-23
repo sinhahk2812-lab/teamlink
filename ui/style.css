@@ -555,3 +555,12 @@ body[data-style="glass"] .dots { border-color: var(--lg-rim); background: var(--
 /* hover must never move a bubble: a moving bubble can slip out from under the mouse and flicker */
 body[data-motion="on"] .msg:hover .bubble:not(.jumbo) { transform: none; }
 body[data-motion="on"] #viewer:not([hidden]) img { animation: none; }
+
+/* ---------- jump to newest ---------- */
+#jumpBtn { position: absolute; right: 26px; bottom: 96px; z-index: 5; min-width: 40px; height: 40px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: inherit; font-size: 15px; cursor: pointer; box-shadow: 0 8px 22px rgba(0,0,0,.3); }
+#jumpBtn.has-new { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; font-size: 13px; }
+body[data-style="glass"] #jumpBtn { border-color: var(--lg-rim); background: var(--lg-sheen), var(--lg-fill); -webkit-backdrop-filter: var(--lg-blur); backdrop-filter: var(--lg-blur); bottom: 104px; }
+body[data-style="glass"] #jumpBtn.has-new { background: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0) 55%), linear-gradient(135deg, var(--accent), var(--accent-2)); }
+body[data-motion="on"] #jumpBtn:not([hidden]) { animation: growIn .16s ease-out; }
+#messages { overflow-anchor: none; } /* the app keeps the reading position itself */
