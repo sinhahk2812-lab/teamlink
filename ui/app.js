@@ -1358,7 +1358,8 @@ function popupDialog() {
     h('label', null, sound, ' Play a sound'),
     h('label', null, text, ' Show the message text (off: only who sent it)'),
   ], { label: 'Done', run: async () => {} },
-  h('button', { class: 'ghost', type: 'button', onclick: () => desk.testPopup() }, 'Show test popup'));
+  [h('button', { class: 'ghost', type: 'button', onclick: () => desk.testPopup() }, 'Show test popup'),
+    h('button', { class: 'ghost', type: 'button', title: 'A list of every popup that was shown or skipped, and why', onclick: () => desk.openPopupLog() }, 'Popup log')]);
 }
 
 function openSettings() {

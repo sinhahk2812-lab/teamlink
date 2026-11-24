@@ -1,6 +1,6 @@
 'use strict';
 // Desktop shell: starts the engine in this process and shows its UI in a window, with a tray icon.
-const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen, nativeTheme, net } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen, nativeTheme, net, Notification } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { Messenger } = require('../core/messenger');
@@ -98,6 +98,16 @@ const POPUP_W = 584, POPUP_H = 200; // includes a transparent margin for the car
 let popupAnim = null;
 let popup = null, popupReady = false, popupData = null, popupCount = 0;
 
+// A small log of every popup decision (shown, skipped and why, failed). It makes "the popup did not come"
+// answerable: Popup settings has a button that opens it.
+function popupLog(text) {
+  try {
+    const file = path.join(app.getPath('userData'), 'popup.log');
+    try { if (fs.statSync(file).size > 200 * 1024) fs.renameSync(file, file + '.old'); } catch {}
+    fs.appendFileSync(file, `${new Date().toISOString()} ${text}\n`);
+  } catch {}
+}
+
 // The popup is skipped only when the user is really looking at that very conversation: TeamLink is the
 // active window, not minimised, and that chat is the one open. Being in another chat (or having the
 // window merely open behind other programs) still gets the popup, like IP Messenger.
@@ -124,9 +134,12 @@ function popupFace(peerId, name) {
 }
 
 function onIncoming(d) {
-  if (lookingAt(d.conv)) return; // that chat is open in front of the user right now
+  try { incomingPopup(d); } catch (e) { popupLog('ERROR while preparing the popup: ' + (e && e.stack || e)); fallbackNotice('New message', 'Open TeamLink to read it'); }
+}
+function incomingPopup(d) {
+  if (lookingAt(d.conv)) return popupLog('skipped: that chat is open in front'); // that chat is open in front of the user right now
   win.flashFrame(true);
-  if (messenger.cfg.popup === false) return;
+  if (messenger.cfg.popup === false) return popupLog('skipped: popups are switched off in Settings');
   const conv = messenger.convView(messenger.store.conv(d.conv));
   const peer = messenger.peers.get(d.from);
   const who = (peer && peer.name) || 'Someone';
@@ -168,55 +181,85 @@ function popupLook() {
 const POPUP_SCALE = { s: 0.8, m: 1, l: 1.22, xl: 1.45 };
 let popupHideTimer = null;
 
-function showPopup() {
-  const prefs = messenger.popupPrefs();
-  Object.assign(popupData, popupLook());
-  if (!popup || popup.isDestroyed()) {
-    popupReady = false;
-    popup = new BrowserWindow({ width: POPUP_W, height: POPUP_H, frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
-      resizable: false, minimizable: false, maximizable: false,
-      fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, show: false, title: 'TeamLink message', icon: ICON,
-      webPreferences: { preload: path.join(__dirname, 'popup-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-    popup.setAlwaysOnTop(true, 'pop-up-menu');
-    popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    popup.webContents.on('will-navigate', (e) => e.preventDefault());
-    popup.loadFile(path.join(__dirname, 'popup.html'));
-  }
-  // Size and place come from the popup settings. The page is zoomed with the window so everything scales together.
-  const scale = POPUP_SCALE[prefs.size] || 1, W = Math.round(POPUP_W * scale), H = Math.round(POPUP_H * scale);
-  popupData.scale = scale;
-  const area = screen.getPrimaryDisplay().workArea, [vert, horiz] = prefs.pos.split('-'), EDGE = 6;
-  const x = horiz === 'left' ? area.x + EDGE : horiz === 'right' ? area.x + area.width - W - EDGE : Math.round(area.x + (area.width - W) / 2);
-  const restY = vert === 'top' ? area.y + EDGE : vert === 'bottom' ? area.y + area.height - H - EDGE : Math.round(area.y + (area.height - H) / 2);
-  // It slides in from the nearest screen edge (from just above its place when it sits in the middle).
-  const fromY = vert === 'top' ? area.y - H : vert === 'bottom' ? area.y + area.height : restY - 60;
-  if (popupReady) popup.webContents.send('popupData', popupData);
-  clearTimeout(popupHideTimer);
-  if (prefs.hideAfter) popupHideTimer = setTimeout(hidePopup, prefs.hideAfter * 1000);
-  // A popup that is already showing in the same place just refreshes its text (the page plays a short pulse).
-  const now = popup.getBounds();
-  if (popup.isVisible() && !popupAnim && now.x === x && now.y === restY && now.width === W) return;
-  clearInterval(popupAnim);
-  const started = Date.now(), DURATION = 380;
-  popup.setBounds({ x, y: fromY, width: W, height: H });
-  try { popup.setOpacity(0); } catch {}
-  popup.showInactive(); // never steals the keyboard from what the user is typing in
-  popupAnim = setInterval(() => {
-    if (!popup || popup.isDestroyed()) { clearInterval(popupAnim); popupAnim = null; return; }
-    const t = Math.min(1, (Date.now() - started) / DURATION);
-    const c1 = 1.70158, c3 = c1 + 1, ease = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); // ease-out with a small overshoot
-    popup.setBounds({ x, y: Math.round(fromY + (restY - fromY) * ease), width: W, height: H });
-    try { popup.setOpacity(Math.min(1, t * 1.6)); } catch {}
-    if (t >= 1) { clearInterval(popupAnim); popupAnim = null; }
-  }, 12);
+// If the popup window cannot be shown, the message must still be announced: use the system's own notification.
+function fallbackNotice(title, body) {
+  try { if (Notification.isSupported()) { const n = new Notification({ title, body, icon: ICON }); n.on('click', showWindow); n.show(); } } catch {}
 }
+
+function createPopup(W, H) {
+  popupReady = false;
+  const w = new BrowserWindow({ width: W, height: H, frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
+    resizable: false, minimizable: false, maximizable: false, focusable: true,
+    fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, show: false, title: 'TeamLink message', icon: ICON,
+    // backgroundThrottling off: a window that is shown without being activated must still paint straight away
+    webPreferences: { preload: path.join(__dirname, 'popup-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
+  w.setAlwaysOnTop(true, 'screen-saver'); // above other always-on-top windows and borderless full-screen programs
+  try { w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch {}
+  w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  w.webContents.on('will-navigate', (e) => e.preventDefault());
+  w.webContents.on('render-process-gone', (e, details) => { popupLog('ERROR: popup window crashed: ' + details.reason); if (popup === w) { popup = null; if (popupData) fallbackNotice(popupData.title, popupData.body); } });
+  w.webContents.on('did-fail-load', (e, code, desc) => popupLog('ERROR: popup page did not load: ' + desc));
+  w.on('closed', () => { if (popup === w) popup = null; });
+  w.loadFile(path.join(__dirname, 'popup.html'));
+  return w;
+}
+
+function showPopup() {
+  try {
+    const prefs = messenger.popupPrefs();
+    Object.assign(popupData, popupLook());
+    // Size and place come from the popup settings. The page is zoomed with the window so everything scales together.
+    const scale = POPUP_SCALE[prefs.size] || 1, W = Math.round(POPUP_W * scale), H = Math.round(POPUP_H * scale);
+    popupData.scale = scale;
+    // On the screen the user is working on (where the mouse is), not always the primary one.
+    let display;
+    try { display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()); } catch { display = screen.getPrimaryDisplay(); }
+    const area = display.workArea, [vert, horiz] = prefs.pos.split('-'), EDGE = 6;
+    const x = horiz === 'left' ? area.x + EDGE : horiz === 'right' ? area.x + area.width - W - EDGE : Math.round(area.x + (area.width - W) / 2);
+    const restY = vert === 'top' ? area.y + EDGE : vert === 'bottom' ? area.y + area.height - H - EDGE : Math.round(area.y + (area.height - H) / 2);
+    // It slides in from the nearest screen edge (from just above its place when it sits in the middle).
+    const fromY = vert === 'top' ? area.y - H : vert === 'bottom' ? area.y + area.height : restY - 60;
+    clearTimeout(popupHideTimer);
+    if (prefs.hideAfter) popupHideTimer = setTimeout(hidePopup, prefs.hideAfter * 1000);
+
+    // Already on screen in the same place: only the text changes (the page plays a short pulse).
+    if (popup && !popup.isDestroyed() && popup.isVisible()) {
+      const now = popup.getBounds();
+      if (popupReady) popup.webContents.send('popupData', popupData);
+      if (!popupAnim && Math.abs(now.x - x) < 3 && Math.abs(now.y - restY) < 3 && Math.abs(now.width - W) < 3) { popup.moveTop(); return popupLog(`updated: "${popupData.title}"`); }
+    } else {
+      // A fresh window for every appearance. Re-showing a hidden transparent window is unreliable on Windows
+      // (it can come back without painting), and making a new one costs only a moment.
+      if (popup && !popup.isDestroyed()) popup.destroy();
+      popup = createPopup(W, H);
+    }
+    clearInterval(popupAnim);
+    const started = Date.now(), DURATION = 380, w = popup;
+    w.setBounds({ x, y: fromY, width: W, height: H });
+    w.showInactive(); // never steals the keyboard from what the user is typing in
+    w.moveTop();
+    popupLog(`shown: "${popupData.title}" at ${x},${restY} size ${W}x${H} on display ${display.id}${prefs.hideAfter ? ' (hides after ' + prefs.hideAfter + 's)' : ''}`);
+    popupAnim = setInterval(() => {
+      if (w.isDestroyed()) { clearInterval(popupAnim); popupAnim = null; return; }
+      const t = Math.min(1, (Date.now() - started) / DURATION);
+      const c1 = 1.70158, c3 = c1 + 1, ease = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); // ease-out with a small overshoot
+      w.setBounds({ x, y: Math.round(fromY + (restY - fromY) * ease), width: W, height: H });
+      if (t >= 1) { clearInterval(popupAnim); popupAnim = null; }
+    }, 12);
+  } catch (e) {
+    popupLog('ERROR while showing the popup: ' + (e && e.stack || e));
+    if (popupData) fallbackNotice(popupData.title, popupData.body);
+  }
+}
+
+ipcMain.handle('openPopupLog', (e) => { if (win && e.sender === win.webContents) { popupLog('(log opened from Popup settings)'); shell.openPath(path.join(app.getPath('userData'), 'popup.log')); } });
 
 // "Show a test popup" in the popup settings.
 ipcMain.handle('testPopup', (e) => {
   if (!win || e.sender !== win.webContents) return;
   popupCount = 0;
   popupData = { conv: null, count: 1, title: 'Asha Verma', body: 'This is how a new message will pop up on your screen.', note: 'Test popup · click to close', ...popupFace(messenger.me.id, messenger.cfg.name), ...(() => { try { const f = messenger.avatarPath(messenger.me.id); if (messenger.cfg.avatar && fs.existsSync(f)) { const b = fs.readFileSync(f); return { avatar: `data:${Messenger.imageKind(b)};base64,${b.toString('base64')}` }; } } catch {} return {}; })() };
-  if (popup && !popup.isDestroyed()) popup.hide(); // replay the entrance with the new settings
+  if (popup && !popup.isDestroyed()) { const w = popup; popup = null; w.destroy(); } // replay the entrance with the new settings
   showPopup();
 });
 
@@ -224,7 +267,7 @@ function hidePopup() {
   popupCount = 0;
   clearTimeout(popupHideTimer);
   clearInterval(popupAnim); popupAnim = null;
-  if (popup && !popup.isDestroyed()) popup.hide();
+  if (popup && !popup.isDestroyed()) { const w = popup; popup = null; w.destroy(); } // gone for good; the next message gets a new one
 }
 
 const fromPopup = (e) => !!popup && !popup.isDestroyed() && e.sender === popup.webContents;
