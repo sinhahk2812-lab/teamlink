@@ -1321,12 +1321,17 @@ function backupBox() {
 }
 
 // ---------------------------------------------------------------- popup settings (desktop app)
+// Shows the test popup and says so in words when it could not be shown.
+function testPopup() {
+  if (!desk) return;
+  Promise.resolve(desk.testPopup()).then((r) => { if (r && !r.ok) toast(r.text); }).catch((e) => toast(e.message));
+}
 function popupDialog() {
   const p = { ...S.me.config.popupPrefs };
   let timer;
   const save = (patch) => {
     Object.assign(p, patch); S.me.config.popupPrefs = { ...p };
-    rpc('setPopupPrefs', patch).then(() => { clearTimeout(timer); timer = setTimeout(() => desk && desk.testPopup(), 150); }).catch((e) => toast(e.message));
+    rpc('setPopupPrefs', patch).then(() => { clearTimeout(timer); timer = setTimeout(testPopup, 150); }).catch((e) => toast(e.message));
     draw();
   };
   const POS = [['top-left', '↖'], ['top-center', '↑'], ['top-right', '↗'], [null], ['middle-center', '●'], [null], ['bottom-left', '↙'], ['bottom-center', '↓'], ['bottom-right', '↘']];
@@ -1358,7 +1363,7 @@ function popupDialog() {
     h('label', null, sound, ' Play a sound'),
     h('label', null, text, ' Show the message text (off: only who sent it)'),
   ], { label: 'Done', run: async () => {} },
-  [h('button', { class: 'ghost', type: 'button', onclick: () => desk.testPopup() }, 'Show test popup'),
+  [h('button', { class: 'ghost', type: 'button', onclick: testPopup }, 'Show test popup'),
     h('button', { class: 'ghost', type: 'button', title: 'A list of every popup that was shown or skipped, and why', onclick: () => desk.openPopupLog() }, 'Popup log')]);
 }
 

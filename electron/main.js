@@ -75,7 +75,16 @@ async function start() {
 
   messenger.on('event', (name, d) => { if (name === 'incoming') onIncoming(d); else if (name === 'opened') onOpened(d); });
   messenger.on('event', (name, d) => { if (name === 'intakeAlert') onIntakeAlert(d); }); // WHATSAPP-INTAKE
-  win.on('focus', () => { win.flashFrame(false); hidePopup(); });
+  // Coming back to TeamLink puts the popup away. Not in its first moments though: on Windows a new always-on-top
+  // window can bounce the focus back to the main window, and that used to close the popup before it was ever seen.
+  // The test popup is started from the focused window, so focus never closes it.
+  win.on('focus', () => {
+    win.flashFrame(false);
+    if (!popup || popup.isDestroyed()) return;
+    if (popupData && popupData.test) return;
+    if (Date.now() - popupShownAt < 2500) return popupLog('kept: the TeamLink window got focus right after the popup appeared');
+    hidePopup('the TeamLink window was brought to the front');
+  });
   win.on('hide', installIfReady);
   // Sealed messages that were open are hidden again as soon as the window is put away or minimised.
   win.on('hide', () => messenger.hideSealed());
@@ -179,7 +188,7 @@ function popupLook() {
 }
 
 const POPUP_SCALE = { s: 0.8, m: 1, l: 1.22, xl: 1.45 };
-let popupHideTimer = null;
+let popupHideTimer = null, popupShownAt = 0, popupCheck = null;
 
 // If the popup window cannot be shown, the message must still be announced: use the system's own notification.
 function fallbackNotice(title, body) {
@@ -220,7 +229,7 @@ function showPopup() {
     // It slides in from the nearest screen edge (from just above its place when it sits in the middle).
     const fromY = vert === 'top' ? area.y - H : vert === 'bottom' ? area.y + area.height : restY - 60;
     clearTimeout(popupHideTimer);
-    if (prefs.hideAfter) popupHideTimer = setTimeout(hidePopup, prefs.hideAfter * 1000);
+    if (prefs.hideAfter) popupHideTimer = setTimeout(() => hidePopup('its time was up'), prefs.hideAfter * 1000);
 
     // Already on screen in the same place: only the text changes (the page plays a short pulse).
     if (popup && !popup.isDestroyed() && popup.isVisible()) {
@@ -238,6 +247,19 @@ function showPopup() {
     w.setBounds({ x, y: fromY, width: W, height: H });
     w.showInactive(); // never steals the keyboard from what the user is typing in
     w.moveTop();
+    popupShownAt = Date.now();
+    // A moment later, make sure it really is on screen; if the system did not show it, try the plain way,
+    // and if that fails too, fall back to the system's own notification.
+    clearTimeout(popupCheck);
+    popupCheck = setTimeout(() => {
+      try {
+        if (w.isDestroyed()) return;
+        if (!w.isVisible()) { popupLog('WARNING: the popup was not visible after it was shown; showing it again'); w.show(); w.setAlwaysOnTop(true, 'screen-saver'); }
+        const b = w.getBounds();
+        if (Math.abs(b.y - restY) > 4 || Math.abs(b.x - x) > 4) { popupLog(`WARNING: the popup was at ${b.x},${b.y} instead of ${x},${restY}; moved`); w.setBounds({ x, y: restY, width: W, height: H }); }
+        if (!w.isVisible() && popupData) { popupLog('ERROR: the popup window stays hidden; used a system notification'); fallbackNotice(popupData.title, popupData.body); }
+      } catch (e) { popupLog('ERROR while checking the popup: ' + (e && e.message)); }
+    }, 900);
     popupLog(`shown: "${popupData.title}" at ${x},${restY} size ${W}x${H} on display ${display.id}${prefs.hideAfter ? ' (hides after ' + prefs.hideAfter + 's)' : ''}`);
     popupAnim = setInterval(() => {
       if (w.isDestroyed()) { clearInterval(popupAnim); popupAnim = null; return; }
@@ -258,21 +280,29 @@ ipcMain.handle('openPopupLog', (e) => { if (win && e.sender === win.webContents)
 ipcMain.handle('testPopup', (e) => {
   if (!win || e.sender !== win.webContents) return;
   popupCount = 0;
-  popupData = { conv: null, count: 1, title: 'Asha Verma', body: 'This is how a new message will pop up on your screen.', note: 'Test popup · click to close', ...popupFace(messenger.me.id, messenger.cfg.name), ...(() => { try { const f = messenger.avatarPath(messenger.me.id); if (messenger.cfg.avatar && fs.existsSync(f)) { const b = fs.readFileSync(f); return { avatar: `data:${Messenger.imageKind(b)};base64,${b.toString('base64')}` }; } } catch {} return {}; })() };
+  popupData = { conv: null, count: 1, title: 'Asha Verma', body: 'This is how a new message will pop up on your screen.', note: 'Test popup · click to close', test: true, ...popupFace(messenger.me.id, messenger.cfg.name), ...(() => { try { const f = messenger.avatarPath(messenger.me.id); if (messenger.cfg.avatar && fs.existsSync(f)) { const b = fs.readFileSync(f); return { avatar: `data:${Messenger.imageKind(b)};base64,${b.toString('base64')}` }; } } catch {} return {}; })() };
   if (popup && !popup.isDestroyed()) { const w = popup; popup = null; w.destroy(); } // replay the entrance with the new settings
   showPopup();
+  // Tell the settings window what happened, so "nothing came" is never a mystery.
+  return new Promise((resolve) => setTimeout(() => {
+    try {
+      if (popup && !popup.isDestroyed() && popup.isVisible()) { const b = popup.getBounds(); return resolve({ ok: true, text: `Test popup is on screen (at ${b.x}, ${b.y}).` }); }
+      resolve({ ok: false, text: 'The test popup could not be shown on this computer. Open "Popup log" to see why.' });
+    } catch (e) { resolve({ ok: false, text: String(e && e.message || e) }); }
+  }, 1300));
 });
 
-function hidePopup() {
+function hidePopup(why) {
+  if (popup && !popup.isDestroyed()) popupLog('closed: ' + (typeof why === 'string' ? why : 'no reason given'));
   popupCount = 0;
-  clearTimeout(popupHideTimer);
+  clearTimeout(popupHideTimer); clearTimeout(popupCheck);
   clearInterval(popupAnim); popupAnim = null;
   if (popup && !popup.isDestroyed()) { const w = popup; popup = null; w.destroy(); } // gone for good; the next message gets a new one
 }
 
 const fromPopup = (e) => !!popup && !popup.isDestroyed() && e.sender === popup.webContents;
 ipcMain.on('popupReady', (e) => { if (fromPopup(e)) { popupReady = true; if (popupData) e.sender.send('popupData', popupData); } });
-ipcMain.on('popupClose', (e) => { if (fromPopup(e)) hidePopup(); });
+ipcMain.on('popupClose', (e) => { if (fromPopup(e)) hidePopup('it was clicked or closed'); });
 ipcMain.on('popupOpen', (e) => {
   if (!fromPopup(e) || !popupData) return;
   const conv = popupData.conv;
