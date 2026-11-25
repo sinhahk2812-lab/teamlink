@@ -1538,18 +1538,44 @@ function renderUpdate() {
   b.replaceChildren(h('span', { class: 'up-ico' }, busy ? '⬇' : '🎉'),
     h('span', { class: 'up-text' }, h('b', null, upd.status === 'ready' ? `Update ${v} is ready` : busy ? `Downloading update ${v}` : `Update ${v} available`),
       h('small', null, upd.status === 'ready' ? 'Click to restart and update' : busy ? `${upd.percent}% done` : upd.canSelfInstall ? `You have ${upd.current}. Click to update.` : `You have ${upd.current}. Click to download.`)),
+    h('button', { class: 'up-new', type: 'button', title: 'See what changed in this update', onclick: (e) => { e.stopPropagation(); whatsNewDialog('coming'); } }, "What's new"),
     busy ? h('span', { class: 'up-bar' }, Object.assign(h('i'), { style: `width:${upd.percent}%` })) : h('span', { class: 'up-go' }, '→'));
+}
+function startUpdate() { if (updateNewer() && upd.status !== 'downloading') { desk.installUpdate(); if (upd.status !== 'ready') toast('Getting the update…'); } }
+// "What's new": what the waiting update brings ('coming'), what the update just installed brought ('updated'),
+// or the whole list ('all', from Settings).
+const newerVersion = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+function whatsNewDialog(mode) {
+  if (!upd) return;
+  const v = updateNewer();
+  const list = mode === 'coming' ? upd.notes || [] : mode === 'updated' ? (upd.history || []).filter((e) => newerVersion(e.version, upd.updatedFrom)) : upd.history || [];
+  const block = (e) => h('div', { class: 'wn-ver' + (e.version === upd.current ? ' now' : '') },
+    h('h4', null, 'Version ' + e.version, e.version === upd.current ? h('span', { class: 'wn-tag' }, 'you have this') : null, e.date ? h('small', null, e.date) : null),
+    h('ul', null, ...e.items.map((t) => h('li', null, t))));
+  const body = [list.length ? h('div', { class: 'wn-list' }, ...list.map(block))
+    : h('p', { class: 'hint' }, mode === 'coming' ? 'The list of changes could not be loaded right now. You can still update.' : 'No notes for this version.')];
+  if (mode === 'updated') body.unshift(h('p', { class: 'hint' }, `TeamLink was updated from ${upd.updatedFrom} to ${upd.current}. This is what changed.`));
+  if (mode === 'coming') body.unshift(h('p', { class: 'hint' }, `You have ${upd.current}. Version ${v} brings:`));
+  const title = mode === 'coming' ? `What's new in ${v}` : mode === 'updated' ? `Updated to ${upd.current}` : "What's new";
+  if (mode === 'coming' && v && upd.status !== 'downloading') modal(title, body, { label: upd.status === 'ready' ? 'Restart and update' : 'Update now', run: async () => startUpdate() });
+  else modal(title, body, { label: 'OK', run: async () => {} });
+}
+function announceUpdate() {
+  if (!upd || !upd.updatedFrom || !S.me || !S.me.config.teamCode || !$('modal').hidden) return;
+  whatsNewDialog('updated');
+  upd.updatedFrom = ''; desk.seenWhatsNew();
 }
 function updateRow() {
   updLine = h('p', { class: 'hint' }, updateText());
-  return h('div', null, updLine, h('button', { class: 'ghost', type: 'button', onclick: async () => { upd = await desk.checkUpdate(); renderUpdate(); } }, 'Check for updates'));
+  return h('div', null, updLine, h('button', { class: 'ghost', type: 'button', onclick: async () => { upd = await desk.checkUpdate(); renderUpdate(); } }, 'Check for updates'),
+    ' ', h('button', { class: 'ghost', type: 'button', onclick: () => whatsNewDialog('all') }, "What's new"));
 }
 if (desk && desk.onOpenConv) desk.onOpenConv((conv) => openConv(conv));
 if (desk && desk.onOpenSend) desk.onOpenSend(() => { if (S.me && S.me.config.teamCode) multiDialog(); });
 if (desk && desk.getUpdate) {
-  desk.getUpdate().then((u) => { upd = u; renderUpdate(); });
+  desk.getUpdate().then((u) => { upd = u; renderUpdate(); setTimeout(announceUpdate, 1500); });
   desk.onUpdate((u) => { upd = u; renderUpdate(); });
-  $('updateBanner').addEventListener('click', () => { if (updateNewer() && upd.status !== 'downloading') { desk.installUpdate(); if (upd.status !== 'ready') toast('Getting the update…'); } });
+  $('updateBanner').addEventListener('click', startUpdate);
 }
 
 // ---------------------------------------------------------------- notifications

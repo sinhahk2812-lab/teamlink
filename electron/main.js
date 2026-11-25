@@ -402,7 +402,35 @@ app.on('window-all-closed', () => {});
 const RELEASES = 'https://github.com/sinhahk2812-lab/teamlink/releases/latest';
 const canSelfInstall = process.platform !== 'darwin';
 let updater = null;
-const update = { current: app.getVersion(), status: app.isPackaged ? 'idle' : 'dev', version: '', percent: 0, error: '', canSelfInstall, latest: '' };
+// "What's new": the list that ships with the app (history), the list for a newer release fetched when one is
+// found (notes), and the version the user had before this start when the app has just been updated (updatedFrom).
+const NOTES_URL = 'https://raw.githubusercontent.com/sinhahk2812-lab/teamlink/main/ui/whatsnew.json';
+const cleanNotes = (list) => (Array.isArray(list) ? list : []).filter((e) => e && /^\d+\.\d+\.\d+$/.test(e.version) && Array.isArray(e.items))
+  .slice(0, 40).map((e) => ({ version: e.version, date: String(e.date || '').slice(0, 10), items: e.items.slice(0, 12).map((t) => String(t).slice(0, 200)) }));
+let history = [];
+try { history = cleanNotes(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'ui', 'whatsnew.json'), 'utf8'))); } catch {}
+const update = { current: app.getVersion(), status: app.isPackaged ? 'idle' : 'dev', version: '', percent: 0, error: '', canSelfInstall, latest: '', history, notes: [], updatedFrom: '' };
+const seenFile = () => path.join(app.getPath('userData'), 'last-version');
+function noteStartVersion() {
+  try {
+    let before = fs.existsSync(seenFile()) ? fs.readFileSync(seenFile(), 'utf8').trim() : '';
+    // Installed before this feature existed (no record, but the app has clearly run here): show this version's notes.
+    if (!before && fs.existsSync(path.join(app.getPath('userData'), 'autostart-set-2')) && history[0] && history[0].version === update.current && history[1]) before = history[1].version;
+    if (before && /^\d+\.\d+\.\d+$/.test(before) && newer(update.current, before)) update.updatedFrom = before;
+    else fs.writeFileSync(seenFile(), update.current); // first start (or same version): nothing to announce
+  } catch {}
+}
+function fetchNotes() {
+  let text = '';
+  const rq = net.request({ url: NOTES_URL, method: 'GET' });
+  rq.on('response', (res) => {
+    if (res.statusCode !== 200) return;
+    res.on('data', (c) => { text += c; if (text.length > 200000) rq.abort(); });
+    res.on('end', () => { try { const notes = cleanNotes(JSON.parse(text)).filter((e) => newer(e.version, update.current)); if (notes.length) setUpdate({ notes }); } catch {} });
+  });
+  rq.on('error', () => {});
+  rq.end();
+}
 
 function setUpdate(patch) {
   Object.assign(update, patch);
@@ -428,11 +456,12 @@ async function checkLatest() {
       });
       latest = (/\/tag\/v?(\d+\.\d+\.\d+)$/.exec(target) || [])[1];
     }
-    if (latest && newer(latest, update.current) && latest !== update.latest) setUpdate({ latest });
+    if (latest && newer(latest, update.current) && latest !== update.latest) { setUpdate({ latest }); fetchNotes(); }
   } catch {}
 }
 
 function setupUpdates() {
+  noteStartVersion();
   setTimeout(checkLatest, 8000);
   setInterval(checkLatest, 2 * 3600 * 1000);
   if (!app.isPackaged) return;
@@ -470,6 +499,7 @@ function installUpdate(comeBackHidden) {
 }
 
 ipcMain.handle('getUpdate', () => update);
+ipcMain.handle('seenWhatsNew', (e) => { if (!fromUi(e)) return; try { fs.writeFileSync(seenFile(), update.current); } catch {} update.updatedFrom = ''; });
 ipcMain.handle('checkUpdate', (e) => {
   if (fromUi(e)) { checkNow(); checkLatest(); }
   return update;

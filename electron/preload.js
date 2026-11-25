@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('desktop', {
   getAutostart: () => ipcRenderer.invoke('getAutostart'),
   setAutostart: (on) => ipcRenderer.invoke('setAutostart', on),
   getUpdate: () => ipcRenderer.invoke('getUpdate'),
+  seenWhatsNew: () => ipcRenderer.invoke('seenWhatsNew'),
   checkUpdate: () => ipcRenderer.invoke('checkUpdate'),
   installUpdate: () => ipcRenderer.invoke('installUpdate'),
   setActiveConv: (conv) => ipcRenderer.send('activeConv', conv),

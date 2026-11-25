@@ -1,0 +1,40 @@
+[
+  { "version": "1.15.0", "date": "2026-11-25", "items": [
+    "New: \"What's new\" — the app now tells you what changed in each update, before and after you install it",
+    "Find it any time in Settings → What's new"
+  ] },
+  { "version": "1.14.4", "date": "2026-11-25", "items": [
+    "Fixed: Copy said \"Could not copy\" — copying a message now works"
+  ] },
+  { "version": "1.14.3", "date": "2026-11-24", "items": [
+    "Fixed: the message popup could close itself before you saw it",
+    "\"Show test popup\" now tells you if the popup could not be shown",
+    "The popup log now says why a popup was closed"
+  ] },
+  { "version": "1.14.2", "date": "2026-11-24", "items": [
+    "Sturdier message popup: it appears on the screen you are working on",
+    "If the popup cannot be shown, a system notification is used instead",
+    "New \"Popup log\" button in Popup settings"
+  ] },
+  { "version": "1.14.1", "date": "2026-11-23", "items": [
+    "Fixed scrolling in long chats: older messages load as you scroll up",
+    "A button to jump to the newest message",
+    "Sturdier file downloads"
+  ] },
+  { "version": "1.14.0", "date": "2026-11-20", "items": [
+    "Typing indicator",
+    "Cancel a download",
+    "Zoom in on pictures and screenshots",
+    "Fixed: messages flickering under the mouse",
+    "Drag and drop files straight onto a chat in the list"
+  ] },
+  { "version": "1.13.0", "date": "2026-11-20", "items": [
+    "Right-click menu on messages: reply, copy, forward, pin, star, select",
+    "Edit a sent message",
+    "Group admins and a member limit",
+    "Emoji reactions",
+    "Delete for everyone and delete for me",
+    "@mentions in groups",
+    "Update notice above the search box"
+  ] }
+]

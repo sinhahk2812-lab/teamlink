@@ -564,3 +564,15 @@ body[data-style="glass"] #jumpBtn { border-color: var(--lg-rim); background: var
 body[data-style="glass"] #jumpBtn.has-new { background: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0) 55%), linear-gradient(135deg, var(--accent), var(--accent-2)); }
 body[data-motion="on"] #jumpBtn:not([hidden]) { animation: growIn .16s ease-out; }
 #messages { overflow-anchor: none; } /* the app keeps the reading position itself */
+
+/* what's new */
+#updateBanner .up-new { flex: none; border: 1px solid rgba(255,255,255,.55); background: rgba(255,255,255,.18); color: #fff; border-radius: 999px; padding: 3px 9px; font-size: 11.5px; cursor: pointer; }
+#updateBanner .up-new:hover { background: rgba(255,255,255,.32); }
+.wn-list { max-height: 52vh; overflow: auto; padding-right: 6px; }
+.wn-ver { padding: 8px 0 6px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.wn-ver:first-child { border-top: 0; }
+.wn-ver h4 { margin: 0 0 4px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; }
+.wn-ver h4 small { margin-left: auto; font-weight: 400; opacity: .6; font-size: 11.5px; }
+.wn-ver .wn-tag { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--accent, #c0392b); color: #fff; }
+.wn-ver ul { margin: 0; padding-left: 20px; }
+.wn-ver li { margin: 3px 0; font-size: 13px; line-height: 1.4; }
