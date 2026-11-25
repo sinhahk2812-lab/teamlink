@@ -1,6 +1,6 @@
 'use strict';
 // Desktop shell: starts the engine in this process and shows its UI in a window, with a tray icon.
-const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen, nativeTheme, net, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, dialog, shell, ipcMain, nativeImage, powerMonitor, screen, nativeTheme, net, Notification, clipboard } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { Messenger } = require('../core/messenger');
@@ -53,7 +53,7 @@ async function start() {
   const external = (url) => { if (/^https?:\/\//i.test(url)) shell.openExternal(url); };
   win.webContents.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin + '/')) { e.preventDefault(); external(url); } });
-  win.webContents.session.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'notifications'));
+  win.webContents.session.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'notifications' || permission === 'clipboard-sanitized-write'));
 
   // Closing the window keeps the app running in the tray so messages still arrive.
   win.on('close', (e) => { if (!exiting) { e.preventDefault(); win.hide(); } });
@@ -358,6 +358,8 @@ ipcMain.handle('setUnread', (e, n) => {
   if (tray) tray.setToolTip(n ? `TeamLink (${n} unread)` : 'TeamLink');
 });
 ipcMain.handle('focus', (e) => { if (fromUi(e)) showWindow(); });
+// Copy goes through the app itself, so it does not depend on the browser's clipboard permission.
+ipcMain.handle('copyText', (e, text) => { if (!fromUi(e)) return false; clipboard.writeText(String(text == null ? '' : text)); return true; });
 // Restart the app (used after a restore, which is applied at start-up).
 ipcMain.handle('restart', (e) => {
   if (!fromUi(e) || exiting) return;

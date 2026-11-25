@@ -147,7 +147,7 @@ function intakeRender() {
 }
 
 // ---------------------------------------------------------------- settings (mine + team admin)
-async function intakeCopy(text) { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Select the text and copy it'); } }
+async function intakeCopy(text) { toast(await putOnClipboard(text) ? 'Copied' : 'Select the text and copy it'); }
 
 async function intakeSettings() {
   const st = await call('intakeState');

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('desktop', {
   openPopupLog: () => ipcRenderer.invoke('openPopupLog'),
   testPopup: () => ipcRenderer.invoke('testPopup'),
   restart: () => ipcRenderer.invoke('restart'),
+  copyText: (text) => ipcRenderer.invoke('copyText', text),
   pickSave: (name) => ipcRenderer.invoke('pickSave', name),
   pickSaveFolder: () => ipcRenderer.invoke('pickSaveFolder'),
   openPath: (p) => ipcRenderer.invoke('openPath', p),

@@ -634,7 +634,16 @@ function msgMenu(x, y, m) {
 document.addEventListener('mousedown', (e) => { if (!e.target.closest('#msgMenu')) closeMenu(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenu(); if (S.sel) { S.sel = null; renderMessages(false); renderSel(); } } });
 window.addEventListener('blur', closeMenu);
-async function copyText(text) { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Could not copy'); } }
+// Copy: through the desktop app when there is one, then the browser's clipboard, then the old select-and-copy way.
+async function putOnClipboard(text) {
+  try { if (desk && desk.copyText && await desk.copyText(text)) return true; } catch {}
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  try {
+    const t = h('textarea', { style: 'position:fixed;left:-9999px;top:0' }); t.value = text;
+    document.body.append(t); t.select(); const ok = document.execCommand('copy'); t.remove(); return ok;
+  } catch { return false; }
+}
+async function copyText(text) { toast(await putOnClipboard(text) ? 'Copied' : 'Could not copy'); }
 
 // ---------------------------------------------------------------- select several messages
 function renderSel() {
